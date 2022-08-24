@@ -65,6 +65,8 @@ if( HAVE_CLOUDSC_GPU_SCC )
             cloudsc_gpu_scc_mod.F90
         DEFINITIONS ${CLOUDSC_DEFINITIONS} CLOUDSC_GPU_SCC
     )
+    target_compile_options( dwarf-cloudsc-gpu-scc-${X} PUBLIC -cuda)
+    target_link_options( dwarf-cloudsc-gpu-scc-${X} PUBLIC -cuda)
     if( HAVE_ACC AND TARGET OpenACC::OpenACC_Fortran )
         target_link_libraries( dwarf-cloudsc-gpu-scc-${X} PRIVATE OpenACC::OpenACC_Fortran )
         target_link_libraries( dwarf-cloudsc-gpu-scc-${X} PRIVATE cloudsc-common-lib-static )
@@ -95,6 +97,8 @@ if( HAVE_CLOUDSC_GPU_SCC_HOIST )
             cloudsc_gpu_scc_hoist_mod.F90
         DEFINITIONS ${CLOUDSC_DEFINITIONS} CLOUDSC_GPU_SCC_HOIST
     )
+    target_compile_options( dwarf-cloudsc-gpu-scc-hoist-${X} PUBLIC -cuda)
+    target_link_options( dwarf-cloudsc-gpu-scc-hoist-${X} PUBLIC -cuda)
     if( HAVE_ACC AND TARGET OpenACC::OpenACC_Fortran )
         target_link_libraries( dwarf-cloudsc-gpu-scc-hoist-${X} PRIVATE OpenACC::OpenACC_Fortran )
         target_link_libraries( dwarf-cloudsc-gpu-scc-hoist-${X} PRIVATE cloudsc-common-lib-static )
