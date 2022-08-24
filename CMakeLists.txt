@@ -16,6 +16,22 @@ project( dwarf-p-cloudsc LANGUAGES C Fortran )
 
 include( cmake/compat.cmake )
 
+add_library(config_1 INTERFACE)
+target_compile_definitions(config_1 INTERFACE
+    INTERFACE WARMRAIN=2 EVAPRAIN=2 EVAPSNOW=1 DEPICE=1 )
+add_library(config_2 INTERFACE)
+target_compile_definitions(config_2 INTERFACE
+    INTERFACE WARMRAIN=1 EVAPRAIN=2 EVAPSNOW=1 DEPICE=1 )
+add_library(config_3 INTERFACE)
+target_compile_definitions(config_3 INTERFACE
+    INTERFACE WARMRAIN=2 EVAPRAIN=1 EVAPSNOW=1 DEPICE=1 )
+add_library(config_4 INTERFACE)
+target_compile_definitions(config_4 INTERFACE
+    INTERFACE WARMRAIN=2 EVAPRAIN=2 EVAPSNOW=2 DEPICE=1 )
+add_library(config_5 INTERFACE)
+target_compile_definitions(config_5 INTERFACE
+    INTERFACE WARMRAIN=2 EVAPRAIN=2 EVAPSNOW=1 DEPICE=2 )
+
 ### OpenACC
 if( NOT DEFINED ENABLE_ACC OR ENABLE_ACC )
     find_package( OpenACC COMPONENTS Fortran C )

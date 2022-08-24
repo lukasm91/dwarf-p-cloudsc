@@ -14,25 +14,24 @@ ecbuild_add_option( FEATURE CLOUDSC_FORTRAN
 
 if( HAVE_CLOUDSC_FORTRAN )
 
+  add_custom_target(dwarf-cloudsc-fortran_all)
+  foreach(X RANGE 1 5)
     # Define the binary build target for this variant
-    ecbuild_add_executable( TARGET dwarf-cloudsc-fortran
+    ecbuild_add_executable( TARGET dwarf-cloudsc-fortran-${X}
         SOURCES
             dwarf_cloudsc.F90
             cloudsc_driver_mod.F90
             cloudsc.F90
         DEFINITIONS ${CLOUDSC_DEFINITIONS}
     )
-    target_link_libraries( dwarf-cloudsc-fortran PRIVATE cloudsc-common-lib )
-
-    target_include_directories(dwarf-cloudsc-fortran PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-    target_include_directories(dwarf-cloudsc-fortran PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/../common)
+    target_link_libraries( dwarf-cloudsc-fortran-${X} PRIVATE cloudsc-common-lib )
 
     if( HAVE_OMP AND TARGET OpenMP::OpenMP_Fortran )
-        target_link_libraries( dwarf-cloudsc-fortran PRIVATE OpenMP::OpenMP_Fortran )
+        target_link_libraries( dwarf-cloudsc-fortran-${X} PRIVATE OpenMP::OpenMP_Fortran )
     endif()
 
     if( HAVE_MPI AND TARGET MPI::MPI_Fortran )
-        target_link_libraries( dwarf-cloudsc-fortran PRIVATE MPI::MPI_Fortran )
+        target_link_libraries( dwarf-cloudsc-fortran-${X} PRIVATE MPI::MPI_Fortran )
     endif()
 
     # Create symlink for the input data
@@ -42,11 +41,14 @@ if( HAVE_CLOUDSC_FORTRAN )
     endif()
 
     if( HAVE_HDF5 )
-      target_include_directories( dwarf-cloudsc-fortran PRIVATE ${HDF5_Fortran_INCLUDE_DIRS} )
-      target_link_libraries( dwarf-cloudsc-fortran PRIVATE ${HDF5_LIBRARIES} )
+      target_include_directories( dwarf-cloudsc-fortran-${X} PRIVATE ${HDF5_Fortran_INCLUDE_DIRS} )
+      target_link_libraries( dwarf-cloudsc-fortran-${X} PRIVATE ${HDF5_LIBRARIES} )
       execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
           ${CMAKE_CURRENT_SOURCE_DIR}/../../config-files/input.h5 ${CMAKE_CURRENT_BINARY_DIR}/../../../input.h5 )
       execute_process(COMMAND ${CMAKE_COMMAND} -E create_symlink
           ${CMAKE_CURRENT_SOURCE_DIR}/../../config-files/reference.h5 ${CMAKE_CURRENT_BINARY_DIR}/../../../reference.h5 )
     endif()
+    target_link_libraries( dwarf-cloudsc-fortran-${X} PRIVATE config_${X})
+    add_dependencies(dwarf-cloudsc-fortran_all dwarf-cloudsc-fortran-${X})
+  endforeach()
 endif()

@@ -554,25 +554,37 @@ ZEPSILON=100._JPRB*EPSILON(ZEPSILON)
 ! IWARMRAIN = 1 ! Sundquist
 ! IWARMRAIN = 2 ! Khairoutdinov and Kogan (2000)
 ! ---------------------------------------------------------------------
-IWARMRAIN = 2
+#ifndef WARMRAIN
+#define WARMRAIN 2
+#endif
+IWARMRAIN = WARMRAIN
 ! ---------------------------------------------------------------------
 ! Set version of rain evaporation
 ! IEVAPRAIN = 1 ! Sundquist
 ! IEVAPRAIN = 2 ! Abel and Boutle (2013)
 ! ---------------------------------------------------------------------
-IEVAPRAIN = 2
+#ifndef EVAPRAIN
+#define EVAPRAIN 2
+#endif
+IEVAPRAIN = EVAPRAIN
 ! ---------------------------------------------------------------------
 ! Set version of snow evaporation
 ! IEVAPSNOW = 1 ! Sundquist
 ! IEVAPSNOW = 2 ! New
 ! ---------------------------------------------------------------------
-IEVAPSNOW = 1
+#ifndef EVAPSNOW
+#define EVAPSNOW 1
+#endif
+IEVAPSNOW = EVAPSNOW
 ! ---------------------------------------------------------------------
 ! Set version of ice deposition
 ! IDEPICE = 1 ! Rotstayn (2001)
 ! IDEPICE = 2 ! New
 ! ---------------------------------------------------------------------
-IDEPICE = 1
+#ifndef DEPICE
+#define DEPICE 1
+#endif
+IDEPICE = DEPICE
 
 ! ---------------------
 ! Some simple constants
