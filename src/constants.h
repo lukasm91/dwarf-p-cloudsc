@@ -2,7 +2,10 @@
 
 #include <algorithm>
 
-using real_t = double;
+#ifndef PRECISION
+#define PRECISION double
+#endif
+using real_t = PRECISION;
 
 namespace {
 

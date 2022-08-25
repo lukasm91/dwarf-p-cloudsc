@@ -45,26 +45,22 @@ private:
 // IWARMRAIN = 1 ! Sundquist
 // IWARMRAIN = 2 ! Khairoutdinov and Kogan (2000)
 // ---------------------------------------------------------------------
-constexpr int iwarmrain = 2;
 // ---------------------------------------------------------------------
 // Set version of rain evaporation
 // IEVAPRAIN = 1 ! Sundquist
 // IEVAPRAIN = 2 ! Abel and Boutle (2013)
 // ---------------------------------------------------------------------
-constexpr int ievaprain = 2;
 // ---------------------------------------------------------------------
 // Set version of snow evaporation
 // IEVAPSNOW = 1 ! Sundquist
 // IEVAPSNOW = 2 ! New
 // ---------------------------------------------------------------------
-constexpr int ievapsnow = 1;
 // ---------------------------------------------------------------------
 // Set version of ice deposition
 // IDEPICE = 1 ! Rotstayn (2001)
 // IDEPICE = 2 ! New
 // ---------------------------------------------------------------------
-constexpr int idepice = 1;
-
+template <int iwarmrain, int ievaprain, int ievapsnow, int idepice>
 __global__ void run_cloudsc(
     int klev, int ngptot, int nproma, real_t *__restrict__ plcrit_aer,
     real_t *__restrict__ picrit_aer, real_t *__restrict__ pre_ice,
@@ -812,144 +808,157 @@ __global__ void run_cloudsc(
 
       //- Ice deposition following Rotstayn et al. (2001)
       //-  (monodisperse ice particle size distribution)
-      if(idepice==1) {
+      if (idepice == 1) {
 
-      // Calculate distance from cloud top
-      // defined by cloudy layer below a layer with cloud frac <0.01
-      // ZDZ = ZDP(JL)/(ZRHO(JL)*RG)
+        // Calculate distance from cloud top
+        // defined by cloudy layer below a layer with cloud frac <0.01
+        // ZDZ = ZDP(JL)/(ZRHO(JL)*RG)
 
-      if (za_prev < yrecldp::rcldtopcf && za >= yrecldp::rcldtopcf)
-        zcldtopdist = 0;
-      else
-        zcldtopdist = zcldtopdist + zdp / (zrho * yomcst::rg);
+        if (za_prev < yrecldp::rcldtopcf && za >= yrecldp::rcldtopcf)
+          zcldtopdist = 0;
+        else
+          zcldtopdist = zcldtopdist + zdp / (zrho * yomcst::rg);
 
-      // only treat depositional growth if liquid present. due to fact
-      // that can not model ice growth from vapour without additional
-      // in-cloud water vapour variable
-      if (ztp1 < yomcst::rtt && zqxfg[NCLDQL] > yrecldp::rlmin) {
-        // T<273K
+        // only treat depositional growth if liquid present. due to fact
+        // that can not model ice growth from vapour without additional
+        // in-cloud water vapour variable
+        if (ztp1 < yomcst::rtt && zqxfg[NCLDQL] > yrecldp::rlmin) {
+          // T<273K
 
-        real_t zvpice = (foeeice(ztp1) * yomcst::rv) / yomcst::rd;
-        real_t zvpliq = zvpice * zfokoop;
-        real_t zicenuclei =
-            real_t(1000) *
-            exp((real_t(12.96) * (zvpliq - zvpice)) / zvpliq - real_t(0.639));
+          real_t zvpice = (foeeice(ztp1) * yomcst::rv) / yomcst::rd;
+          real_t zvpliq = zvpice * zfokoop;
+          real_t zicenuclei =
+              real_t(1000) *
+              exp((real_t(12.96) * (zvpliq - zvpice)) / zvpliq - real_t(0.639));
 
-        //  2.4e-2 is conductivity of air
-        //  8.8 = 700**1/3 = density of ice to the third
-        real_t zadd = (yomcst::rlstt *
-                       (yomcst::rlstt / ((yomcst::rv * ztp1)) - real_t(1))) /
-                      ((real_t(2.4e-2) * ztp1));
-        real_t zbdd = (yomcst::rv * ztp1 * *pap) / ((real_t(2.21) * zvpice));
-        real_t zcvds = (real_t(7.8) * pow(zicenuclei / zrho, real_t(0.666)) *
-                        (zvpliq - zvpice)) /
-                       ((real_t(8.87) * (zadd + zbdd) * zvpice));
+          //  2.4e-2 is conductivity of air
+          //  8.8 = 700**1/3 = density of ice to the third
+          real_t zadd = (yomcst::rlstt *
+                         (yomcst::rlstt / ((yomcst::rv * ztp1)) - real_t(1))) /
+                        ((real_t(2.4e-2) * ztp1));
+          real_t zbdd = (yomcst::rv * ztp1 * *pap) / ((real_t(2.21) * zvpice));
+          real_t zcvds = (real_t(7.8) * pow(zicenuclei / zrho, real_t(0.666)) *
+                          (zvpliq - zvpice)) /
+                         ((real_t(8.87) * (zadd + zbdd) * zvpice));
 
-        // RICEINIT=1.E-12_JPRB is initial mass of ice particle
-        real_t zice0 = max(zicecld, (zicenuclei * yrecldp::riceinit) / zrho);
+          // RICEINIT=1.E-12_JPRB is initial mass of ice particle
+          real_t zice0 = max(zicecld, (zicenuclei * yrecldp::riceinit) / zrho);
 
-        // new value of ice:
-        real_t zinew =
-            pow((real_t(0.666) * zcvds * ptsphy + pow(zice0, real_t(0.666))),
-                real_t(1.5));
+          // new value of ice:
+          real_t zinew =
+              pow((real_t(0.666) * zcvds * ptsphy + pow(zice0, real_t(0.666))),
+                  real_t(1.5));
 
-        // grid-mean deposition rate:
-        real_t zdepos = max(za * (zinew - zice0), real_t(0));
+          // grid-mean deposition rate:
+          real_t zdepos = max(za * (zinew - zice0), real_t(0));
 
-        // Limit deposition to liquid water amount
-        // If liquid is all frozen, ice would use up reservoir of water
-        // vapour in excess of ice saturation mixing ratio - However this
-        // can not be represented without a in-cloud humidity variable. Using
-        // the grid-mean humidity would imply a large artificial horizontal
-        // flux from the clear sky to the cloudy area. We thus rely on the
-        // supersaturation check to clean up any remaining supersaturation
-        zdepos = min(zdepos, zqxfg[NCLDQL]); // limit to liquid water amount
+          // Limit deposition to liquid water amount
+          // If liquid is all frozen, ice would use up reservoir of water
+          // vapour in excess of ice saturation mixing ratio - However this
+          // can not be represented without a in-cloud humidity variable. Using
+          // the grid-mean humidity would imply a large artificial horizontal
+          // flux from the clear sky to the cloudy area. We thus rely on the
+          // supersaturation check to clean up any remaining supersaturation
+          zdepos = min(zdepos, zqxfg[NCLDQL]); // limit to liquid water amount
 
-        // At top of cloud, reduce deposition rate near cloud top to account for
-        // small scale turbulent processes, limited ice nucleation and ice
-        // fallout
-        //      ZDEPOS =
-        //      ZDEPOS*MIN(RDEPLIQREFRATE+ZCLDTOPDIST(JL)/RDEPLIQREFDEPTH,1.0_JPRB)
-        // Change to include dependence on ice nuclei concentration
-        // to increase deposition rate with decreasing temperatures
-        real_t zinfactor = min(zicenuclei / real_t(15000), real_t(1));
-        zdepos = zdepos *
-                 min(zinfactor + (real_t(1) - zinfactor) *
-                                     (yrecldp::rdepliqrefrate +
-                                      zcldtopdist / yrecldp::rdepliqrefdepth),
-                     real_t(1));
+          // At top of cloud, reduce deposition rate near cloud top to account
+          // for small scale turbulent processes, limited ice nucleation and ice
+          // fallout
+          //      ZDEPOS =
+          //      ZDEPOS*MIN(RDEPLIQREFRATE+ZCLDTOPDIST(JL)/RDEPLIQREFDEPTH,1.0_JPRB)
+          // Change to include dependence on ice nuclei concentration
+          // to increase deposition rate with decreasing temperatures
+          real_t zinfactor = min(zicenuclei / real_t(15000), real_t(1));
+          zdepos = zdepos *
+                   min(zinfactor + (real_t(1) - zinfactor) *
+                                       (yrecldp::rdepliqrefrate +
+                                        zcldtopdist / yrecldp::rdepliqrefdepth),
+                       real_t(1));
 
-        // add to matrix
-        zsolqa[NCLDQI][NCLDQL] += zdepos;
-        zsolqa[NCLDQL][NCLDQI] -= zdepos;
-        zqxfg[NCLDQI] += zdepos;
-        zqxfg[NCLDQL] -= zdepos;
-      }
-              // Ice deposition assuming ice PSD
+          // add to matrix
+          zsolqa[NCLDQI][NCLDQL] += zdepos;
+          zsolqa[NCLDQL][NCLDQI] -= zdepos;
+          zqxfg[NCLDQI] += zdepos;
+          zqxfg[NCLDQL] -= zdepos;
+        }
+        // Ice deposition assuming ice PSD
       } else if (idepice == 2) {
-              // Calculate distance from cloud top
-             // defined by cloudy layer below a layer with cloud frac <0.01
-             // ZDZ = ZDP(JL)/(ZRHO(JL)*RG)
+        // Calculate distance from cloud top
+        // defined by cloudy layer below a layer with cloud frac <0.01
+        // ZDZ = ZDP(JL)/(ZRHO(JL)*RG)
 
-              if(za_prev<yrecldp::rcldtopcf && za>=yrecldp::rcldtopcf) 
-                zcldtopdist=real_t(0);
-              else
-                zcldtopdist=zcldtopdist+zdp/((zrho*yomcst::rg));
+        if (za_prev < yrecldp::rcldtopcf && za >= yrecldp::rcldtopcf)
+          zcldtopdist = real_t(0);
+        else
+          zcldtopdist = zcldtopdist + zdp / ((zrho * yomcst::rg));
 
-             // only treat depositional growth if liquid present. due to fact
-             // that can not model ice growth from vapour without additional
-             // in-cloud water vapour variable
-              if(ztp1<yomcst::rtt && zqxfg[NCLDQL]>yrecldp::rlmin) {
-                // T<273K
+        // only treat depositional growth if liquid present. due to fact
+        // that can not model ice growth from vapour without additional
+        // in-cloud water vapour variable
+        if (ztp1 < yomcst::rtt && zqxfg[NCLDQL] > yrecldp::rlmin) {
+          // T<273K
 
-                real_t zvpice=(foeeice(ztp1)*yomcst::rv)/yomcst::rd;
-                real_t zvpliq=zvpice*zfokoop;
-                real_t zicenuclei=real_t(1000)*exp((real_t(12.96)*(zvpliq-zvpice))/zvpliq-real_t(0.639));
+          real_t zvpice = (foeeice(ztp1) * yomcst::rv) / yomcst::rd;
+          real_t zvpliq = zvpice * zfokoop;
+          real_t zicenuclei =
+              real_t(1000) *
+              exp((real_t(12.96) * (zvpliq - zvpice)) / zvpliq - real_t(0.639));
 
-                // RICEINIT=1.E-12_JPRB is initial mass of ice particle
-                real_t zice0=max(zicecld,(zicenuclei*yrecldp::riceinit)/zrho);
+          // RICEINIT=1.E-12_JPRB is initial mass of ice particle
+          real_t zice0 = max(zicecld, (zicenuclei * yrecldp::riceinit) / zrho);
 
-                // Particle size distribution
-                real_t ztcg=real_t(1);
-                real_t zfacx1i=real_t(1);
+          // Particle size distribution
+          real_t ztcg = real_t(1);
+          real_t zfacx1i = real_t(1);
 
-                real_t zaplusb=  
-                  yrecldp::rcl_apb1*zvpice-yrecldp::rcl_apb2*zvpice*ztp1+*pap*yrecldp::rcl_apb3*pow(ztp1,real_t(3));
-                real_t zcorrfac=pow(real_t(1)/zrho, real_t(0.5));
-                real_t zcorrfac2=pow(ztp1/real_t(273.0),real_t(1.5))*(real_t(393)/(ztp1+real_t(120)));
+          real_t zaplusb = yrecldp::rcl_apb1 * zvpice -
+                           yrecldp::rcl_apb2 * zvpice * ztp1 +
+                           *pap * yrecldp::rcl_apb3 * pow(ztp1, real_t(3));
+          real_t zcorrfac = pow(real_t(1) / zrho, real_t(0.5));
+          real_t zcorrfac2 = pow(ztp1 / real_t(273.0), real_t(1.5)) *
+                             (real_t(393) / (ztp1 + real_t(120)));
 
-                real_t zpr02=(zrho*zice0*yrecldp::rcl_const1i)/((ztcg*zfacx1i));
+          real_t zpr02 =
+              (zrho * zice0 * yrecldp::rcl_const1i) / ((ztcg * zfacx1i));
 
-                real_t zterm1=((zvpliq-zvpice)*sqr(ztp1)*zvpice*zcorrfac2*ztcg*yrecldp::rcl_const2i*zfacx1i)/  
-                 ((zrho*zaplusb*zvpice));
-                real_t zterm2=real_t(.65)*yrecldp::rcl_const6i*pow(zpr02,yrecldp::rcl_const4i)+  
-                 (yrecldp::rcl_const3i*pow(zcorrfac,real_t(0.5))*pow(zrho,real_t(0.5))*pow(zpr02,yrecldp::rcl_const5i))/pow(zcorrfac2,real_t(0.5));
+          real_t zterm1 = ((zvpliq - zvpice) * sqr(ztp1) * zvpice * zcorrfac2 *
+                           ztcg * yrecldp::rcl_const2i * zfacx1i) /
+                          ((zrho * zaplusb * zvpice));
+          real_t zterm2 =
+              real_t(.65) * yrecldp::rcl_const6i *
+                  pow(zpr02, yrecldp::rcl_const4i) +
+              (yrecldp::rcl_const3i * pow(zcorrfac, real_t(0.5)) *
+               pow(zrho, real_t(0.5)) * pow(zpr02, yrecldp::rcl_const5i)) /
+                  pow(zcorrfac2, real_t(0.5));
 
-                real_t zdepos=max(za*zterm1*zterm2*ptsphy,real_t(0));
+          real_t zdepos = max(za * zterm1 * zterm2 * ptsphy, real_t(0));
 
-               // Limit deposition to liquid water amount
-               // If liquid is all frozen, ice would use up reservoir of water
-               // vapour in excess of ice saturation mixing ratio - However this
-               // can not be represented without a in-cloud humidity variable. Using
-               // the grid-mean humidity would imply a large artificial horizontal
-               // flux from the clear sky to the cloudy area. We thus rely on the
-               // supersaturation check to clean up any remaining supersaturation
-                zdepos=min(zdepos,zqxfg[NCLDQL]);// limit to liquid water amount
+          // Limit deposition to liquid water amount
+          // If liquid is all frozen, ice would use up reservoir of water
+          // vapour in excess of ice saturation mixing ratio - However this
+          // can not be represented without a in-cloud humidity variable. Using
+          // the grid-mean humidity would imply a large artificial horizontal
+          // flux from the clear sky to the cloudy area. We thus rely on the
+          // supersaturation check to clean up any remaining supersaturation
+          zdepos = min(zdepos, zqxfg[NCLDQL]); // limit to liquid water amount
 
-               // At top of cloud, reduce deposition rate near cloud top to account for
-               // small scale turbulent processes, limited ice nucleation and ice fallout
-               // Change to include dependence on ice nuclei concentration
-               // to increase deposition rate with decreasing temperatures
-                real_t zinfactor=min(zicenuclei/real_t(15000),real_t(1));
-                zdepos=zdepos*min(zinfactor+(real_t(1)-zinfactor)*(yrecldp::rdepliqrefrate+zcldtopdist/   
-                  yrecldp::rdepliqrefdepth),real_t(1));
+          // At top of cloud, reduce deposition rate near cloud top to account
+          // for small scale turbulent processes, limited ice nucleation and ice
+          // fallout Change to include dependence on ice nuclei concentration to
+          // increase deposition rate with decreasing temperatures
+          real_t zinfactor = min(zicenuclei / real_t(15000), real_t(1));
+          zdepos = zdepos *
+                   min(zinfactor + (real_t(1) - zinfactor) *
+                                       (yrecldp::rdepliqrefrate +
+                                        zcldtopdist / yrecldp::rdepliqrefdepth),
+                       real_t(1));
 
-               // add to matrix
-                zsolqa[NCLDQI][NCLDQL]+=zdepos;
-                zsolqa[NCLDQL][NCLDQI]-=zdepos;
-                zqxfg[NCLDQI]+=zdepos;
-                zqxfg[NCLDQL]-=zdepos;
-              }
+          // add to matrix
+          zsolqa[NCLDQI][NCLDQL] += zdepos;
+          zsolqa[NCLDQL][NCLDQI] -= zdepos;
+          zqxfg[NCLDQI] += zdepos;
+          zqxfg[NCLDQL] -= zdepos;
+        }
       }
 
       //////
@@ -1893,7 +1902,7 @@ __global__ void run_cloudsc(
 }
 
 void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
-         py::dict o) {
+         py::dict o, int config) {
   Buffer plcrit_aer{f["plcrit_aer"]};
   Buffer picrit_aer{f["picrit_aer"]};
   Buffer pre_ice{f["pre_ice"]};
@@ -1953,7 +1962,23 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
   int nthreads = nproma;
   int nblocks = (ngptot + nthreads - 1) / nthreads;
 
-  run_cloudsc<<<nblocks, nthreads>>>(
+  decltype(&run_cloudsc<1, 1, 1, 1>) fptr = nullptr;
+
+  if (config == 1)
+    fptr = run_cloudsc<2, 2, 1, 1>;
+  else if (config == 2)
+    fptr = run_cloudsc<1, 2, 1, 1>;
+  else if (config == 3)
+    fptr = run_cloudsc<2, 1, 1, 1>;
+  else if (config == 4)
+    fptr = run_cloudsc<2, 2, 2, 1>;
+  else if (config == 5)
+    fptr = run_cloudsc<2, 2, 1, 2>;
+  else {
+    std::cerr << "Unsupported function configuration";
+    std::abort();
+  }
+  fptr<<<nblocks, nthreads>>>(
       klev, ngptot, nproma, plcrit_aer.get(), picrit_aer.get(), pre_ice.get(),
       pccn.get(), pnice.get(), pt.get(), pq.get(), pvfl.get(), pvfi.get(),
       phrsw.get(), phrlw.get(), pvervel.get(), pap.get(), paph.get(),
