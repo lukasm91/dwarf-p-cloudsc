@@ -23,6 +23,11 @@ ecbuild_add_option( FEATURE CLOUDSC_GPU_SCC
     CONDITION Serialbox_FOUND OR HDF5_FOUND
 )
 
+ecbuild_add_option( FEATURE CLOUDSC_GPU_SCC_OPT
+    DESCRIPTION "Build optimized GPU version of CLOUDSC using SCC layout with optimizations" DEFAULT OFF
+    CONDITION Serialbox_FOUND OR HDF5_FOUND
+)
+
 ecbuild_add_option( FEATURE CLOUDSC_GPU_SCC_HOIST
     DESCRIPTION "Build optimized GPU version of CLOUDSC using SCC with hoisted temporary arrays" DEFAULT OFF
     CONDITION Serialbox_FOUND OR HDF5_FOUND
@@ -114,6 +119,38 @@ if( HAVE_CLOUDSC_GPU_SCC_HOIST )
     endif()
     target_link_libraries(dwarf-cloudsc-gpu-scc-hoist-${X} PRIVATE config_${X})
     add_dependencies(dwarf-cloudsc-gpu-scc-hoist_all dwarf-cloudsc-gpu-scc-hoist-${X})
+  endforeach()
+endif()
+
+
+if( HAVE_CLOUDSC_GPU_SCC_OPT )
+  add_custom_target(dwarf-cloudsc-gpu-scc-opt_all)
+  foreach(X RANGE 1 5)
+    ecbuild_add_executable(
+        TARGET dwarf-cloudsc-gpu-scc-opt-${X}
+        SOURCES
+            dwarf_cloudsc_gpu.F90
+            cloudsc_driver_gpu_scc_opt_mod.F90
+            cloudsc_gpu_scc_opt_mod.F90
+        DEFINITIONS ${CLOUDSC_DEFINITIONS} CLOUDSC_GPU_SCC_OPT
+    )
+    target_compile_options( dwarf-cloudsc-gpu-scc-opt-${X} PUBLIC -cuda)
+    target_link_options( dwarf-cloudsc-gpu-scc-opt-${X} PUBLIC -cuda)
+    if( HAVE_ACC AND TARGET OpenACC::OpenACC_Fortran )
+        target_link_libraries( dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE OpenACC::OpenACC_Fortran )
+        target_link_libraries( dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE cloudsc-common-lib-static )
+    else()
+        target_link_libraries( dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE cloudsc-common-lib )
+    endif()
+
+    if( HAVE_MPI AND TARGET MPI::MPI_Fortran )
+        target_link_libraries( dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE MPI::MPI_Fortran )
+    endif()
+    if ( HAVE_HDF5 )
+        target_include_directories( dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE ${HDF5_Fortran_INCLUDE_DIRS} )
+    endif()
+    target_link_libraries(dwarf-cloudsc-gpu-scc-opt-${X} PRIVATE config_${X})
+    add_dependencies(dwarf-cloudsc-gpu-scc-opt_all dwarf-cloudsc-gpu-scc-opt-${X})
   endforeach()
 endif()
 
