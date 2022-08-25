@@ -1902,7 +1902,7 @@ __global__ void run_cloudsc(
 }
 
 void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
-         py::dict o, int config) {
+         py::dict o, int config, bool perftest) {
   Buffer plcrit_aer{f["plcrit_aer"]};
   Buffer picrit_aer{f["picrit_aer"]};
   Buffer pre_ice{f["pre_ice"]};
@@ -1978,18 +1978,43 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
     std::cerr << "Unsupported function configuration";
     std::abort();
   }
-  fptr<<<nblocks, nthreads>>>(
-      klev, ngptot, nproma, plcrit_aer.get(), picrit_aer.get(), pre_ice.get(),
-      pccn.get(), pnice.get(), pt.get(), pq.get(), pvfl.get(), pvfi.get(),
-      phrsw.get(), phrlw.get(), pvervel.get(), pap.get(), paph.get(),
-      plsm.get(), ldcum.get(), ktype.get(), plu.get(), plude.get(), psnde.get(),
-      pmfu.get(), pmfd.get(), pa.get(), pclv.get(), psupsat.get(),
-      tendency_tmp.get(), tendency_loc.get(), prainfrac_toprfz.get(),
-      pcovptot.get(), pfsqlf.get(), pfsqif.get(), pfcqlng.get(), pfcqnng.get(),
-      pfsqrf.get(), pfsqsf.get(), pfcqrng.get(), pfcqsng.get(), pfsqltur.get(),
-      pfsqitur.get(), pfplsl.get(), pfplsn.get(), pfhpsl.get(), pfhpsn.get(),
-      tmp1.get(), tmp2.get(), ptsphy, ldslphy);
+
+  cudaEvent_t start, stop;
+  CUDA_CHECK(cudaEventCreate(&start));
+  CUDA_CHECK(cudaEventCreate(&stop));
+  int nreps = perftest ? 30 : 1;
+
+  for (int i = 0; i < nreps; ++i) {
+    if (i == 10)
+      CUDA_CHECK(cudaEventRecord(start));
+    fptr<<<nblocks, nthreads>>>(
+        klev, ngptot, nproma, plcrit_aer.get(), picrit_aer.get(), pre_ice.get(),
+        pccn.get(), pnice.get(), pt.get(), pq.get(), pvfl.get(), pvfi.get(),
+        phrsw.get(), phrlw.get(), pvervel.get(), pap.get(), paph.get(),
+        plsm.get(), ldcum.get(), ktype.get(), plu.get(), plude.get(),
+        psnde.get(), pmfu.get(), pmfd.get(), pa.get(), pclv.get(),
+        psupsat.get(), tendency_tmp.get(), tendency_loc.get(),
+        prainfrac_toprfz.get(), pcovptot.get(), pfsqlf.get(), pfsqif.get(),
+        pfcqlng.get(), pfcqnng.get(), pfsqrf.get(), pfsqsf.get(), pfcqrng.get(),
+        pfcqsng.get(), pfsqltur.get(), pfsqitur.get(), pfplsl.get(),
+        pfplsn.get(), pfhpsl.get(), pfhpsn.get(), tmp1.get(), tmp2.get(),
+        ptsphy, ldslphy);
+  }
+  if (nreps > 1)
+    CUDA_CHECK(cudaEventRecord(stop));
   CUDA_CHECK(cudaDeviceSynchronize());
+
+  if (perftest) {
+    float time;
+    CUDA_CHECK(cudaEventElapsedTime(&time, start, stop));
+    time = time / (nreps - 10) / 1000;
+    std::cout << "Elapsed time per run [ms]: " << time * 1000 << '\n';
+    std::cout << "Performance [MP/s]:        "
+              << ngptot * klev / time / 1e6 << '\n';
+  }
+
+  CUDA_CHECK(cudaEventDestroy(start));
+  CUDA_CHECK(cudaEventDestroy(stop));
 }
 
 PYBIND11_MODULE(cloudsc_cuda, m) { m.def("run", &run, "Run the cloud scheme"); }

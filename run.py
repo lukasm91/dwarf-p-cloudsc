@@ -19,25 +19,6 @@ class FortranWriter:
         self.file.write(np.array([0], dtype="<i4").tobytes())
 
 
-class FortranReader:
-    def __init__(self, path):
-        self.file = open(path, "r")
-
-    def next(self):
-        _ = np.fromfile(self.file, dtype="<i4", count=1)
-        dims = []
-        while True:
-            next_val = np.fromfile(self.file, dtype="<i4", count=1)
-            if next_val[0] == 0:
-                break
-            dims.append(next_val[0])
-
-        data = np.fromfile(self.file, dtype="<f8", count=np.prod(dims))
-        _ = np.fromfile(self.file, dtype="<i4", count=1)
-
-        return data.reshape(list(reversed(dims)))
-
-
 def load_params(inp, keys=None, prefix=None):
     ret = dict()
     if prefix is not None:
@@ -287,6 +268,7 @@ parser = argparse.ArgumentParser(description="Run CLOUDSC dwarf")
 parser.add_argument("--ngptot", type=int, help="number of columns", default=163840)
 parser.add_argument("--nproma", type=int, help="blocking parameter", default=128)
 parser.add_argument("--dtype", type=str, help="data type", default="double")
+parser.add_argument("--config", type=int, help="configuration", default=1)
 parser.add_argument("--verify", action="store_true")
 run_args = parser.parse_args()
 ngptot = run_args.ngptot
@@ -319,15 +301,24 @@ for g, vs in c.__dict__.items():
 
 
 import cloudsc_cuda
+
 cloudsc_cuda.run(
-    klev, ngptot, nproma, c.__dict__, f.__dict__, s.__dict__, o.__dict__, 1
+    klev,
+    ngptot,
+    nproma,
+    c.__dict__,
+    f.__dict__,
+    s.__dict__,
+    o.__dict__,
+    run_args.config,
+    not run_args.verify,
 )
 
 #  import python_impl
 #  python_impl.run_cloud_scheme(klev, ngptot, nproma, c, f, s, o, dtype)
 
 if run_args.verify:
-    out = FortranWriter("serialized.dat")
+    out = FortranWriter("serialized_gpu_cuda.dat")
 
     out.write(f.plude)
     out.write(o.pcovptot)
