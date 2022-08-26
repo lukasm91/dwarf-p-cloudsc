@@ -201,6 +201,7 @@ __global__ void run_cloudsc(
 
     // initialization for CLV family
     real_t zqx0[NCLV - 1];
+#pragma unroll
     for (int jm = 0; jm < NCLV - 1; ++jm) {
       zqx[jm] = *get_4d(pclv, jm) + ptsphy * *get_4d(tendency_tmp_cld, jm);
       zqx0[jm] = zqx[jm];
@@ -213,24 +214,25 @@ __global__ void run_cloudsc(
       // Evaporate small cloud liquid water amounts
       zlneg[NCLDQL] = zlneg[NCLDQL] + zqx[NCLDQL];
       real_t zqadj = zqx[NCLDQL] * zqtmst;
-      tendency_loc_q_ = tendency_loc_q_ + zqadj;
-      tendency_loc_t_ = tendency_loc_t_ - yoethf::ralvdcp * zqadj;
-      zqx[NCLDQV] = zqx[NCLDQV] + zqx[NCLDQL];
-      zqx[NCLDQL] = 0.0;
+      tendency_loc_q_ += zqadj;
+      tendency_loc_t_ -= yoethf::ralvdcp * zqadj;
+      zqx[NCLDQV] += zqx[NCLDQL];
+      zqx[NCLDQL] = real_t(0);
 
       // Evaporate small cloud ice water amounts
       zlneg[NCLDQI] = zlneg[NCLDQI] + zqx[NCLDQI];
       zqadj = zqx[NCLDQI] * zqtmst;
-      tendency_loc_q_ = tendency_loc_q_ + zqadj;
-      tendency_loc_t_ = tendency_loc_t_ - yoethf::ralsdcp * zqadj;
-      zqx[NCLDQV] = zqx[NCLDQV] + zqx[NCLDQI];
-      zqx[NCLDQI] = 0.0;
+      tendency_loc_q_ += zqadj;
+      tendency_loc_t_ -= yoethf::ralsdcp * zqadj;
+      zqx[NCLDQV] += zqx[NCLDQI];
+      zqx[NCLDQI] = real_t(0);
 
       // Set cloud cover to zero
-      za = 0;
+      za = real_t(0);
     }
 
     // Tidy up small CLV variables
+#pragma unroll
     for (int jm = 0; jm < NCLV - 1; ++jm) {
       if (zqx[jm] < yrecldp::rlmin) {
         zlneg[jm] += zqx[jm];
@@ -301,6 +303,7 @@ __global__ void run_cloudsc(
 
       real_t zqxfg[NCLV];
       // First guess microphysics
+#pragma unroll
       for (int jm = 0; jm < NCLV; ++jm)
         zqxfg[jm] = zqx[jm];
 
@@ -490,7 +493,7 @@ __global__ void run_cloudsc(
         }
         // *convective snow detrainment source
         if (*ldcum)
-          zsolqa[NCLDQS][NCLDQS] = zsolqa[NCLDQS][NCLDQS] + *psnde * zdtgdp;
+          zsolqa[NCLDQS][NCLDQS] += *psnde * zdtgdp;
       }
       //  3.3  SUBSIDENCE COMPENSATING CONVECTIVE UPDRAUGHTS
       // Three terms:
@@ -517,6 +520,7 @@ __global__ void run_cloudsc(
 
         real_t zlfinalsum = real_t(0);
 
+#pragma unroll
         for (int jm = 0; jm < NCLV - 1; ++jm) {
           if (!llfall(static_cast<type>(jm)) &&
               iphase(static_cast<type>(jm)) != VAPOUR) {
@@ -530,9 +534,9 @@ __global__ void run_cloudsc(
             zlfinal = zlcust - zevap;
             zlfinalsum = zlfinalsum + zlfinal; // sum
 
-            zsolqa[jm][jm] = zsolqa[jm][jm] + zlcust; // whole sum
-            zsolqa[NCLDQV][jm] = zsolqa[NCLDQV][jm] + zevap;
-            zsolqa[jm][NCLDQV] = zsolqa[jm][NCLDQV] - zevap;
+            zsolqa[jm][jm] += zlcust; // whole sum
+            zsolqa[NCLDQV][jm] += zevap;
+            zsolqa[jm][NCLDQV] -= zevap;
           }
         }
 
@@ -541,7 +545,7 @@ __global__ void run_cloudsc(
         real_t zacust = zmf * zanewm1;
         if (zlfinalsum < zepsec)
           zacust = real_t(0);
-        zsolac = zsolac + zacust;
+        zsolac += zacust;
       }
 
       // Subsidence sink of cloud to the layer below
@@ -552,8 +556,8 @@ __global__ void run_cloudsc(
             max(real_t(0), (*(pmfu + nproma) + *(pmfd + nproma)) * zdtgdp);
 
         zsolab = zsolab + zmfdn;
-        zsolqb[NCLDQL][NCLDQL] = zsolqb[NCLDQL][NCLDQL] + zmfdn;
-        zsolqb[NCLDQI][NCLDQI] = zsolqb[NCLDQI][NCLDQI] + zmfdn;
+        zsolqb[NCLDQL][NCLDQL] += zmfdn;
+        zsolqb[NCLDQI][NCLDQI] += zmfdn;
 
         // record sink for cloud budget and enthalpy budget diagnostics
         zconvsink[NCLDQL] = zmfdn;
@@ -817,7 +821,7 @@ __global__ void run_cloudsc(
         if (za_prev < yrecldp::rcldtopcf && za >= yrecldp::rcldtopcf)
           zcldtopdist = 0;
         else
-          zcldtopdist = zcldtopdist + zdp / (zrho * yomcst::rg);
+          zcldtopdist += zdp / (zrho * yomcst::rg);
 
         // only treat depositional growth if liquid present. due to fact
         // that can not model ice growth from vapour without additional
@@ -977,6 +981,7 @@ __global__ void run_cloudsc(
       //     the precipitation flux can be defined directly level by level
       //     There is no vertical memory required from the flux variable
 
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         if (llfall(static_cast<type>(jm)) || jm == NCLDQI) {
           // source from layer above
@@ -1156,13 +1161,15 @@ __global__ void run_cloudsc(
           // rain Explicit
           if (ztp1 <= yomcst::rtt) {
             zsolqa[NCLDQS][NCLDQL] += zrainaut;
-            zsolqa[NCLDQS][NCLDQL] += zrainacc;
             zsolqa[NCLDQL][NCLDQS] -= zrainaut;
+
+            zsolqa[NCLDQS][NCLDQL] += zrainacc;
             zsolqa[NCLDQL][NCLDQS] -= zrainacc;
           } else {
             zsolqa[NCLDQR][NCLDQL] += zrainaut;
-            zsolqa[NCLDQR][NCLDQL] += zrainacc;
             zsolqa[NCLDQL][NCLDQR] -= zrainaut;
+
+            zsolqa[NCLDQR][NCLDQL] += zrainacc;
             zsolqa[NCLDQL][NCLDQR] -= zrainacc;
           }
         }
@@ -1242,6 +1249,7 @@ __global__ void run_cloudsc(
       }
 
       // Loop over frozen hydrometeors (ice, snow)
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         if (iphase(static_cast<type>(jm)) == ICE) {
           int jn = imelt(static_cast<type>(jm));
@@ -1592,6 +1600,7 @@ __global__ void run_cloudsc(
       //--------------------------------------
       // Evaporate small precipitation amounts
       //--------------------------------------
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         if (llfall(static_cast<type>(jm))) {
           if (zqxfg[jm] < yrecldp::rlmin) {
@@ -1622,10 +1631,12 @@ __global__ void run_cloudsc(
 
       // scale the sink terms, in the correct order,
       // recalculating the scale factor each time
+#pragma unroll
       for (int jm = 0; jm < NCLV; ++jm) {
 
         // recalculate sum
         real_t psum_solqa = real_t(0);
+#pragma unroll
         for (int jn = 0; jn < NCLV; ++jn) {
           psum_solqa = psum_solqa + zsolqa[jm][jn];
         }
@@ -1635,6 +1646,7 @@ __global__ void run_cloudsc(
         real_t zrr = max(zsinksum, zmm);
         real_t zzratio = zmm / zrr;
         // scale
+#pragma unroll
         for (int jn = 0; jn < NCLV; ++jn) {
           if (zsolqa[jm][jn] < real_t(0)) {
             zsolqa[jm][jn] *= zzratio;
@@ -1647,7 +1659,9 @@ __global__ void run_cloudsc(
 
       // set the LHS of equation
       real_t zqlhs[NCLV][NCLV];
+#pragma unroll
       for (int jm = 0; jm < NCLV; ++jm) {
+#pragma unroll
         for (int jn = 0; jn < NCLV; ++jn) {
           // diagonals: microphysical sink terms+transport
           if (jm == jn) {
@@ -1665,9 +1679,11 @@ __global__ void run_cloudsc(
 
       real_t zqxn[NCLV];
       // set the RHS of equation
+#pragma unroll
       for (int jm = 0; jm < NCLV; ++jm) {
         // sum the explicit source and sink
         real_t zexplicit = real_t(0);
+#pragma unroll
         for (int jn = 0; jn < NCLV; ++jn) {
           zexplicit += zsolqa[jm][jn]; // sum over middle index
         }
@@ -1684,11 +1700,14 @@ __global__ void run_cloudsc(
       //       modifications.
 
       // Non pivoting recursive factorization
+#pragma unroll
       for (int jn = 0; jn < NCLV - 1; ++jn) {
         // number of steps
+#pragma unroll
         for (int jm = jn + 1; jm < NCLV; ++jm) {
           // row index
           zqlhs[jm][jn] = zqlhs[jm][jn] / zqlhs[jn][jn];
+#pragma unroll
           for (int ik = jn + 1; ik < NCLV; ++ik) {
             // column index
             zqlhs[jm][ik] = zqlhs[jm][ik] - zqlhs[jm][jn] * zqlhs[jn][ik];
@@ -1698,14 +1717,18 @@ __global__ void run_cloudsc(
 
       // Backsubstitution
       //  step 1
+#pragma unroll
       for (int jn = 1; jn < NCLV; ++jn) {
+#pragma unroll
         for (int jm = 0; jm < jn - 1; ++jm) {
           zqxn[jn] = zqxn[jn] - zqlhs[jn][jm] * zqxn[jm];
         }
       }
       //  step 2
       zqxn[NCLV - 1] = zqxn[NCLV - 1] / zqlhs[NCLV - 1][NCLV - 1];
+#pragma unroll
       for (int jn = NCLV - 2; jn >= 0; --jn) {
+#pragma unroll
         for (int jm = jn + 1; jm < NCLV; ++jm) {
           zqxn[jn] = zqxn[jn] - zqlhs[jn][jm] * zqxn[jm];
         }
@@ -1715,6 +1738,7 @@ __global__ void run_cloudsc(
       // Ensure no small values (including negatives) remain in cloud
       // variables nor precipitation rates. Evaporate l,i,r,s to water vapour.
       // Latent heating taken into account below
+#pragma unroll
       for (int jn = 0; jn < NCLV - 1; ++jn) {
         if (zqxn[jn] < zepsec) {
           zqxn[NCLDQV] = zqxn[NCLDQV] + zqxn[jn];
@@ -1723,9 +1747,11 @@ __global__ void run_cloudsc(
       }
 
       // variables needed for next level
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         zqxnm1[jm] = zqxn[jm];
       }
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         zqxn2d[jm] = zqxn[jm];
       }
@@ -1734,6 +1760,7 @@ __global__ void run_cloudsc(
       //     diagnostic precipitation fluxes
       //     It is this scaled flux that must be used for source to next layer
 
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         zpfplsx[jm] = zfallsink[jm] * zqxn[jm] * zrdtgdp;
       }
@@ -1748,6 +1775,7 @@ __global__ void run_cloudsc(
 
       // 6.1 Temperature and CLV budgets
 
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
 
         // calculate fluxes in and out of box for conservation of TL
@@ -1783,10 +1811,13 @@ __global__ void run_cloudsc(
     } else {
       *pcovptot = real_t(0);
 
+#pragma unroll
       for (int jm = 0; jm < NCLV; ++jm)
         *tendency_loc_cld = real_t(0);
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm)
         zqxn2d[jm] = real_t(0);
+#pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm)
         zpfplsx[jm] = real_t(0); // precip fluxes at next level
     }

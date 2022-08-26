@@ -270,6 +270,7 @@ __device__ real_t foeew(real_t ptare) {
 }
 
 constexpr real_t sqr(real_t v) { return v * v; }
+constexpr real_t cube(real_t v) { return v * v * v; }
 // CONSIDERATION OF MIXED PHASES
 // FOEALFA is calculated to distinguish the three cases:
 // FOEALFA=1            water phase
