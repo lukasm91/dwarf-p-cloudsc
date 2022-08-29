@@ -7,6 +7,9 @@
 #endif
 using real_t = PRECISION;
 
+constexpr real_t zepsilon =
+    real_t(100) * std::numeric_limits<real_t>::epsilon();
+
 namespace {
 
 namespace yomcst {
@@ -63,7 +66,7 @@ constexpr real_t nshapep = 2.414213562373095;
 constexpr real_t nshapeq = 2.414213562373095;
 constexpr int nssopt = 1;
 constexpr real_t ramid = 0.8;
-constexpr real_t ramin = 1e-08;
+constexpr real_t ramin = 1e-8;
 constexpr real_t rbeta = 0.0;
 constexpr real_t rbetap1 = 0.0;
 constexpr real_t rccn = 125.0;
@@ -152,7 +155,7 @@ constexpr real_t riceinit = 1e-12;
 constexpr real_t rkconv = 0.00016666666666666666;
 constexpr real_t rkooptau = 10800.0;
 constexpr real_t rlcritsnow = 3e-05;
-constexpr real_t rlmin = 1e-08;
+constexpr real_t rlmin = 1e-8;
 constexpr real_t rnice = 0.027;
 constexpr real_t rpecons = 5.54725619859993e-05;
 constexpr real_t rprc1 = 100.0;
@@ -328,15 +331,12 @@ __device__ real_t fokoop(real_t ptare) {
                   foeeliq(ptare) / foeeice(ptare));
 }
 
-constexpr real_t zepsilon =
-    real_t(100) * std::numeric_limits<real_t>::epsilon();
-
 // Some simple constants
 constexpr real_t zgdcp = yomcst::rg / yomcst::rcpd;
 constexpr real_t zrdcp = yomcst::rd / yomcst::rcpd;
 constexpr real_t zcons1a =
     yomcst::rcpd / ((yomcst::rlmlt * yomcst::rg * yrecldp::rtaumel));
-constexpr real_t zepsec = real_t(1.0e-14);
+constexpr real_t zepsec = 1e-14;
 ;
 constexpr real_t zrg_r = real_t(1) / yomcst::rg;
 constexpr real_t zrldcp = real_t(1) / (yoethf::ralsdcp - yoethf::ralvdcp);

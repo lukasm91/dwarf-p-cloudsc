@@ -40,6 +40,29 @@ private:
 };
 } // namespace
 
+constexpr int POS_T = 0;
+constexpr int POS_Q = 1;
+constexpr int POS_A = 2;
+constexpr int POS_CLD = 3;
+
+struct descriptor {
+  __device__ descriptor(int nproma, int nk, int nfields)
+      : offset_(nproma * nk * nfields * blockIdx.x + threadIdx.x),
+        fstride_(nproma * nk) {}
+  __device__ int get(int nproma, int ki, int fi) const {
+    return offset_ + fi * fstride_ + ki * nproma;
+  };
+
+private:
+  int offset_;
+  int fstride_;
+};
+
+inline __device__ int get_index(descriptor const &d, int nproma, int ki,
+                                int fi = 0) {
+  return d.get(nproma, ki, fi);
+}
+
 // ---------------------------------------------------------------------
 // Set version of warm-rain autoconversion/accretion
 // IWARMRAIN = 1 ! Sundquist
@@ -86,82 +109,43 @@ __global__ void run_cloudsc(
     real_t *__restrict__ pfhpsn, real_t *__restrict__ tmp1,
     real_t *__restrict__ tmp2, real_t ptsphy, bool ldslphy) {
 
-  auto get_4d = [&](real_t *ptr, int offset, int klev_extra = 0) {
-    return ptr + offset * (klev + klev_extra) * nproma;
-  };
-
   if (nproma * blockIdx.x + threadIdx.x >= ngptot)
     return;
 
-  plcrit_aer += klev * nproma * blockIdx.x + threadIdx.x;
-  picrit_aer += klev * nproma * blockIdx.x + threadIdx.x;
-  pre_ice += klev * nproma * blockIdx.x + threadIdx.x;
-  pccn += klev * nproma * blockIdx.x + threadIdx.x;
-  pnice += klev * nproma * blockIdx.x + threadIdx.x;
-  pt += klev * nproma * blockIdx.x + threadIdx.x;
-  pq += klev * nproma * blockIdx.x + threadIdx.x;
-  pvfl += klev * nproma * blockIdx.x + threadIdx.x;
-  pvfi += klev * nproma * blockIdx.x + threadIdx.x;
-  phrsw += klev * nproma * blockIdx.x + threadIdx.x;
-  phrlw += klev * nproma * blockIdx.x + threadIdx.x;
-  pvervel += klev * nproma * blockIdx.x + threadIdx.x;
   pap += klev * nproma * blockIdx.x + threadIdx.x;
   paph += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  plsm += nproma * blockIdx.x + threadIdx.x;
-  ldcum += nproma * blockIdx.x + threadIdx.x;
-  ktype += nproma * blockIdx.x + threadIdx.x;
-  plu += klev * nproma * blockIdx.x + threadIdx.x;
   plude += klev * nproma * blockIdx.x + threadIdx.x;
-  psnde += klev * nproma * blockIdx.x + threadIdx.x;
   pmfu += klev * nproma * blockIdx.x + threadIdx.x;
   pmfd += klev * nproma * blockIdx.x + threadIdx.x;
-  pa += klev * nproma * blockIdx.x + threadIdx.x;
-  pclv += klev * nproma * 5 * blockIdx.x + threadIdx.x;
-  psupsat += klev * nproma * blockIdx.x + threadIdx.x;
-  tendency_tmp += klev * nproma * 8 * blockIdx.x + threadIdx.x;
-  tendency_loc += klev * nproma * 8 * blockIdx.x + threadIdx.x;
 
-  prainfrac_toprfz += nproma * blockIdx.x + threadIdx.x;
-  pcovptot += klev * nproma * blockIdx.x + threadIdx.x;
-  pfsqlf += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfsqif += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfcqlng += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfcqnng += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfsqrf += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfsqsf += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfcqrng += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfcqsng += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfsqltur += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfsqitur += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfplsl += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfplsn += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfhpsl += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  pfhpsn += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  tmp1 += (klev + 1) * 100 * nproma * blockIdx.x + threadIdx.x;
-  tmp2 += (klev + 1) * 100 * nproma * blockIdx.x + threadIdx.x;
+  descriptor descriptor_k = descriptor{nproma, klev, 1};
+  descriptor descriptor_k1 = descriptor{nproma, klev + 1, 1};
+  descriptor descriptor_tendency = descriptor{nproma, klev, 8};
+  descriptor descriptor_pclv = descriptor{nproma, klev, 5};
+  descriptor descriptor_2d = descriptor{nproma, 1, 1};
 
   real_t const zqtmst = real_t(1) / ptsphy;
   real_t const paph_top =
       *(paph + klev * nproma); // returns paph(jl,klev+1,ibl)
 
   // fluxes, summed up towwars the top
-  *pfsqlf = real_t(0);
-  *pfsqif = real_t(0);
-  *pfsqrf = real_t(0);
-  *pfsqsf = real_t(0);
-  *pfcqlng = real_t(0);
-  *pfcqnng = real_t(0);
-  *pfcqrng = 0.0; // rain
-  *pfcqsng = 0.0; // snow
+  pfsqlf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfsqif[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfsqrf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfsqsf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfcqlng[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfcqnng[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfcqrng[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfcqsng[get_index(descriptor_k1, nproma, 0)] = real_t(0);
   // fluxes due to turbulence
-  *pfsqltur = real_t(0);
-  *pfsqitur = real_t(0);
+  pfsqltur[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfsqitur[get_index(descriptor_k1, nproma, 0)] = real_t(0);
 
   // not summed up
-  *pfplsl = real_t(0);
-  *pfplsn = real_t(0);
-  *pfhpsl = real_t(0);
-  *pfhpsn = real_t(0);
+  pfplsl[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfplsn[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfhpsl[get_index(descriptor_k1, nproma, 0)] = real_t(0);
+  pfhpsn[get_index(descriptor_k1, nproma, 0)] = real_t(0);
 
   // next values hold the values from the previous k-level
   real_t zqxnm1[NCLV - 1] = {};
@@ -174,19 +158,9 @@ __global__ void run_cloudsc(
   real_t za_prev = std::numeric_limits<real_t>::quiet_NaN();
 
   // rain fraction at top of refreezing layer
-  *prainfrac_toprfz = 0;
+  real_t prainfrac_toprfz_ = 0;
 
   for (int jk = 0; jk < klev; ++jk) {
-    real_t *__restrict__ tendency_loc_t = tendency_loc + 0 * klev * nproma;
-    real_t *__restrict__ tendency_loc_q = tendency_loc + 1 * klev * nproma;
-    real_t *__restrict__ tendency_loc_a = tendency_loc + 2 * klev * nproma;
-    real_t *__restrict__ tendency_loc_cld = tendency_loc + 3 * klev * nproma;
-
-    real_t *__restrict__ tendency_tmp_t = tendency_tmp + 0 * klev * nproma;
-    real_t *__restrict__ tendency_tmp_q = tendency_tmp + 1 * klev * nproma;
-    real_t *__restrict__ tendency_tmp_a = tendency_tmp + 2 * klev * nproma;
-    real_t *__restrict__ tendency_tmp_cld = tendency_tmp + 3 * klev * nproma;
-
     // initialization of output tendencies
     real_t tendency_loc_t_ = 0;
     real_t tendency_loc_q_ = 0;
@@ -194,16 +168,27 @@ __global__ void run_cloudsc(
 
     // non CLV initialization
     real_t zqx[NCLV];
-    real_t ztp1 = *pt + ptsphy * *tendency_tmp_t;
-    zqx[NCLDQV] = *pq + ptsphy * *tendency_tmp_q;
-    real_t za = *pa + ptsphy * *tendency_tmp_a;
-    real_t zaorig = *pa + ptsphy * *tendency_tmp_a;
+    real_t ztp1 =
+        pt[get_index(descriptor_k, nproma, jk)] +
+        ptsphy *
+            tendency_tmp[get_index(descriptor_tendency, nproma, jk, POS_T)];
+    zqx[NCLDQV] =
+        pq[get_index(descriptor_k, nproma, jk)] +
+        ptsphy *
+            tendency_tmp[get_index(descriptor_tendency, nproma, jk, POS_Q)];
+    real_t pa_ = pa[get_index(descriptor_k, nproma, jk)];
+    real_t tendency_tmp_a_ =
+        tendency_tmp[get_index(descriptor_tendency, nproma, jk, POS_A)];
+    real_t za = pa_ + ptsphy * tendency_tmp_a_;
+    real_t zaorig = pa_ + ptsphy * tendency_tmp_a_;
 
     // initialization for CLV family
     real_t zqx0[NCLV - 1];
 #pragma unroll
     for (int jm = 0; jm < NCLV - 1; ++jm) {
-      zqx[jm] = *get_4d(pclv, jm) + ptsphy * *get_4d(tendency_tmp_cld, jm);
+      zqx[jm] = pclv[get_index(descriptor_pclv, nproma, jk, jm)] +
+                ptsphy * tendency_tmp[get_index(descriptor_tendency, nproma, jk,
+                                                POS_CLD + jm)];
       zqx0[jm] = zqx[jm];
     }
 
@@ -443,20 +428,21 @@ __global__ void run_cloudsc(
 
       // 3.1.3 Include supersaturation from previous timestep
       // (Calculated in sltENDIF semi-lagrangian LDSLPHY=T)
-      if (*psupsat > zepsec) {
+      real_t psupsat_ = psupsat[get_index(descriptor_k, nproma, jk)];
+      if (psupsat_ > zepsec) {
         if (ztp1 > yrecldp::rthomo) {
           // Turn supersaturation into liquid water
-          zsolqa[NCLDQL][NCLDQL] += *psupsat;
-          zpsupsatsrce[NCLDQL] = *psupsat;
+          zsolqa[NCLDQL][NCLDQL] += psupsat_;
+          zpsupsatsrce[NCLDQL] = psupsat_;
           // Add liquid to first guess for deposition term
-          zqxfg[NCLDQL] += *psupsat;
+          zqxfg[NCLDQL] += psupsat_;
           // Store cloud budget diagnostics if required
         } else {
           // Turn supersaturation into ice water
-          zsolqa[NCLDQI][NCLDQI] += *psupsat;
-          zpsupsatsrce[NCLDQI] = *psupsat;
+          zsolqa[NCLDQI][NCLDQI] += psupsat_;
+          zpsupsatsrce[NCLDQI] = psupsat_;
           // Add ice to first guess for deposition term
-          zqxfg[NCLDQI] += *psupsat;
+          zqxfg[NCLDQI] += psupsat_;
           // Store cloud budget diagnostics if required
         }
 
@@ -477,9 +463,11 @@ __global__ void run_cloudsc(
 
         *plude *= zdtgdp;
 
-        if (*ldcum && *plude > yrecldp::rlmin && *(plu + nproma) > zepsec) {
+        real_t plu_ = plu[get_index(descriptor_k, nproma, jk + 1)];
+        if (ldcum[get_index(descriptor_2d, nproma, 0)] &&
+            *plude > yrecldp::rlmin && plu_ > zepsec) {
 
-          zsolac = zsolac + *plude / *(plu + nproma);
+          zsolac = zsolac + *plude / plu_;
           // *diagnostic temperature split*
           zalfaw = zfoealfa;
           zconvsrce[NCLDQL] = zalfaw * *plude;
@@ -492,8 +480,9 @@ __global__ void run_cloudsc(
           *plude = real_t(0);
         }
         // *convective snow detrainment source
-        if (*ldcum)
-          zsolqa[NCLDQS][NCLDQS] += *psnde * zdtgdp;
+        if (ldcum[get_index(descriptor_2d, nproma, 0)])
+          zsolqa[NCLDQS][NCLDQS] +=
+              psnde[get_index(descriptor_k, nproma, jk)] * zdtgdp;
       }
       //  3.3  SUBSIDENCE COMPENSATING CONVECTIVE UPDRAUGHTS
       // Three terms:
@@ -505,7 +494,7 @@ __global__ void run_cloudsc(
       // Subsidence source from layer above
       //               and
       // Evaporation of cloud within the layer
-      if (jk > yrecldp::ncldtop - 1) {
+      if (jk >= yrecldp::ncldtop) {
 
         // Now have to work out how much liquid evaporates at arrival point
         // since there is no prognostic memory for in-cloud humidity, i.e.
@@ -572,7 +561,7 @@ __global__ void run_cloudsc(
       // Define turbulent erosion rate
       real_t zldifdt = yrecldp::rcldiff * ptsphy; // original version
       // Increase by factor of 5 for convective points
-      if (*ktype > 0 && *plude > zepsec)
+      if (ktype[get_index(descriptor_2d, nproma, 0)] > 0 && *plude > zepsec)
         zldifdt = yrecldp::rcldiff_convi * zldifdt;
 
       // At the moment, works on mixed RH profile and partitioned ice/liq
@@ -618,10 +607,11 @@ __global__ void run_cloudsc(
       real_t zmfdn = real_t(0);
       if (jk < klev - 1)
         zmfdn = *(pmfu + nproma) + *(pmfd + nproma);
-      real_t zwtot =
-          *pvervel + real_t(0.5) * yomcst::rg * (*pmfu + *pmfd + zmfdn);
+      real_t zwtot = pvervel[get_index(descriptor_k, nproma, jk)] +
+                     real_t(0.5) * yomcst::rg * (*pmfu + *pmfd + zmfdn);
       zwtot = min(zdpmxdt, max(-zdpmxdt, zwtot));
-      real_t zzzdt = *phrsw + *phrlw;
+      real_t zzzdt = phrsw[get_index(descriptor_k, nproma, jk)] +
+                     phrlw[get_index(descriptor_k, nproma, jk)];
       real_t zdtdiab =
           min(zdpmxdt * zdtdp, max(-zdpmxdt * zdtdp, zzzdt)) * ptsphy +
           yoethf::ralfdcp * zldefr;
@@ -997,7 +987,7 @@ __global__ void run_cloudsc(
           //  note that for T>233K this is the same as above.
           real_t zfall;
           if (yrecldp::laericesed && jm == NCLDQI) {
-            real_t zre_ice = *pre_ice;
+            real_t zre_ice = pre_ice[get_index(descriptor_k, nproma, jk)];
             // the exponent value is from
             // morrison et al. jas 2005 appendix
             zfall = real_t(0.002) * zre_ice; // ** 1.0
@@ -1057,8 +1047,10 @@ __global__ void run_cloudsc(
                  exp(yrecldp::rsnowlin2 * (ztp1 - yomcst::rtt));
 
           if (yrecldp::laericeauto) {
-            zlcrit = *picrit_aer;
-            zzco = zzco * pow(yrecldp::rnice / *pnice, real_t(0.333));
+            zlcrit = picrit_aer[get_index(descriptor_k, nproma, jk)];
+            zzco = zzco * pow(yrecldp::rnice /
+                                  pnice[get_index(descriptor_k, nproma, jk)],
+                              real_t(0.333));
           } else {
             zlcrit = yrecldp::rlcritsnow;
           }
@@ -1077,14 +1069,16 @@ __global__ void run_cloudsc(
           real_t zzco = yrecldp::rkconv * ptsphy;
           real_t zlcrit;
           if (yrecldp::laerliqautolsp) {
-            zlcrit = *plcrit_aer;
+            zlcrit = plcrit_aer[get_index(descriptor_k, nproma, jk)];
             // 0.3 = n**0.333 with n=125 cm-3
-            zzco = zzco * pow(yrecldp::rccn / *pccn, real_t(0.333));
+            zzco = zzco * pow(yrecldp::rccn /
+                                  pccn[get_index(descriptor_k, nproma, jk)],
+                              real_t(0.333));
           } else {
             // Modify autoconversion threshold dependent on:
             //  land (polluted, high CCN, smaller droplets, higher threshold)
             //  sea  (clean, low CCN, larger droplets, lower threshold)
-            if (*plsm > real_t(0.5))
+            if (plsm[get_index(descriptor_2d, nproma, 0)] > real_t(0.5))
               zlcrit = yrecldp::rclcrit_land; // land
             else
               zlcrit = yrecldp::rclcrit_sea; // ocean
@@ -1100,7 +1094,9 @@ __global__ void run_cloudsc(
 
           if (yrecldp::laerliqcoll) {
             // 5.0 = n**0.333 with n=125 cm-3
-            zcfpr *= pow(yrecldp::rccn / *pccn, real_t(0.333));
+            zcfpr *=
+                pow(yrecldp::rccn / pccn[get_index(descriptor_k, nproma, jk)],
+                    real_t(0.333));
           }
 
           zzco *= zcfpr;
@@ -1123,7 +1119,7 @@ __global__ void run_cloudsc(
         } else if (iwarmrain == 2) {
 
           real_t zconst, zlcrit;
-          if (*plsm > real_t(0.5)) {
+          if (plsm[get_index(descriptor_2d, nproma, 0)] > real_t(0.5)) {
             // land
             zconst = yrecldp::rcl_kk_cloud_num_land;
             zlcrit = yrecldp::rclcrit_land;
@@ -1280,14 +1276,14 @@ __global__ void run_cloudsc(
           // If mostly rain, then supercooled rain slow to freeze
           // otherwise faster to freeze (snow or ice pellets)
           zqpretot = max(zqx[NCLDQS] + zqx[NCLDQR], zepsec);
-          *prainfrac_toprfz = zqx[NCLDQR] / zqpretot;
+          prainfrac_toprfz_ = zqx[NCLDQR] / zqpretot;
         }
 
         // If temperature less than zero
         if (ztp1 < yomcst::rtt) {
 
           real_t zfrzmax;
-          if (*prainfrac_toprfz > real_t(0.8)) {
+          if (prainfrac_toprfz_ > real_t(0.8)) {
 
             // Majority of raindrops completely melted
             // Refreezing is by slow heterogeneous freezing
@@ -1770,10 +1766,10 @@ __global__ void run_cloudsc(
       if (zqpretot < zepsec)
         zcovptot = real_t(0);
 
-      //////
-      //              6  *** UPDATE TENDANCIES ***
+        //////
+        //              6  *** UPDATE TENDANCIES ***
 
-      // 6.1 Temperature and CLV budgets
+        // 6.1 Temperature and CLV budgets
 
 #pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
@@ -1795,9 +1791,11 @@ __global__ void run_cloudsc(
         //       uses ZQX. This is due to clipping at start of cloudsc which
         //       include the tendency already in TENDENCY_LOC_T and
         //       TENDENCY_LOC_q. ZQX was reset
-        *get_4d(tendency_loc_cld, jm) = (zqxn[jm] - zqx0[jm]) * zqtmst;
+        tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_CLD + jm)] =
+            (zqxn[jm] - zqx0[jm]) * zqtmst;
       }
-      *get_4d(tendency_loc_cld, NCLV - 1) = real_t(0);
+      tendency_loc[get_index(descriptor_tendency, nproma, jk,
+                             POS_CLD + NCLV - 1)] = real_t(0);
 
       // 6.2 Humidity budget
       tendency_loc_q_ += (zqxn[NCLDQV] - zqx[NCLDQV]) * zqtmst;
@@ -1806,14 +1804,15 @@ __global__ void run_cloudsc(
       tendency_loc_a_ += zda * zqtmst;
 
       // j Copy precipitation fraction into output variable
-      *pcovptot = zcovptot;
+      pcovptot[get_index(descriptor_k, nproma, jk)] = zcovptot;
 
     } else {
-      *pcovptot = real_t(0);
+      pcovptot[get_index(descriptor_k, nproma, jk)] = real_t(0);
 
 #pragma unroll
       for (int jm = 0; jm < NCLV; ++jm)
-        *tendency_loc_cld = real_t(0);
+        tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_CLD + jm)] =
+            real_t(0);
 #pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm)
         zqxn2d[jm] = real_t(0);
@@ -1821,9 +1820,12 @@ __global__ void run_cloudsc(
       for (int jm = 0; jm < NCLV - 1; ++jm)
         zpfplsx[jm] = real_t(0); // precip fluxes at next level
     }
-    *tendency_loc_t = tendency_loc_t_;
-    *tendency_loc_a = tendency_loc_a_;
-    *tendency_loc_q = tendency_loc_q_;
+    tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_T)] =
+        tendency_loc_t_;
+    tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_A)] =
+        tendency_loc_a_;
+    tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_Q)] =
+        tendency_loc_q_;
 
     ztp1_prev = ztp1;
     za_prev = za;
@@ -1834,102 +1836,82 @@ __global__ void run_cloudsc(
     //             8  *** FLUX/DIAGNOSTICS COMPUTATIONS ***
 
     real_t zgdph_r = -zrg_r * (*(paph + nproma) - *paph) * zqtmst;
-    *(pfsqlf + nproma) = *pfsqlf;
-    *(pfsqif + nproma) = *pfsqif;
-    *(pfsqrf + nproma) = *pfsqlf;
-    *(pfsqsf + nproma) = *pfsqif;
-    *(pfcqlng + nproma) = *pfcqlng;
-    *(pfcqnng + nproma) = *pfcqnng;
-    *(pfcqrng + nproma) = *pfcqlng;
-    *(pfcqsng + nproma) = *pfcqnng;
-    *(pfsqltur + nproma) = *pfsqltur;
-    *(pfsqitur + nproma) = *pfsqitur;
+    real_t pfsqlf_ = pfsqlf[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqrf_ = pfsqlf_;
+    real_t pfsqif_ = pfsqif[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqsf_ = pfsqif_;
+    real_t pfcqlng_ = pfcqlng[get_index(descriptor_k1, nproma, jk)];
+    real_t pfcqnng_ = pfcqnng[get_index(descriptor_k1, nproma, jk)];
+    real_t pfcqrng_ = pfcqlng_;
+    real_t pfcqsng_ = pfcqnng_;
+    real_t pfsqltur_ = pfsqltur[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqitur_ = pfsqitur[get_index(descriptor_k1, nproma, jk)];
 
     real_t zalfaw = zfoealfa;
 
     // Liquid , LS scheme minus detrainment
-    *(pfsqlf + nproma) +=
-        (zqxn2d[NCLDQL] - zqx0[NCLDQL] + *pvfl * ptsphy - zalfaw * *plude) *
-        zgdph_r;
+    real_t pvfl_ = pvfl[get_index(descriptor_k, nproma, jk)];
+    pfsqlf[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqlf_ +
+        (zqxn2d[NCLDQL] - zqx0[NCLDQL] + pvfl_ * ptsphy - zalfaw * *plude) *
+            zgdph_r;
     // liquid, negative numbers
-    *(pfcqlng + nproma) += zlneg[NCLDQL] * zgdph_r;
+    pfcqlng[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfcqlng_ + zlneg[NCLDQL] * zgdph_r;
 
     // liquid, vertical diffusion
-    *(pfsqltur + nproma) += *pvfl * ptsphy * zgdph_r;
+    pfsqltur[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqltur_ + pvfl_ * ptsphy * zgdph_r;
 
     // Rain, LS scheme
-    *(pfsqrf + nproma) += (zqxn2d[NCLDQR] - zqx0[NCLDQR]) * zgdph_r;
+    pfsqrf[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqrf_ + (zqxn2d[NCLDQR] - zqx0[NCLDQR]) * zgdph_r;
     // , IBLrain, negative numbers
-    *(pfcqrng + nproma) += zlneg[NCLDQR] * zgdph_r;
+    pfcqrng[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfcqrng_ + zlneg[NCLDQR] * zgdph_r;
 
     // Ice , LS scheme minus detrainment
-    *(pfsqif + nproma) += (zqxn2d[NCLDQI] - zqx0[NCLDQI] + *pvfi * ptsphy -
-                           (real_t(1) - zalfaw) * *plude) *
-                          zgdph_r;
+    real_t pvfi_ = pvfi[get_index(descriptor_k, nproma, jk)];
+    pfsqif[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqif_ + (zqxn2d[NCLDQI] - zqx0[NCLDQI] + pvfi_ * ptsphy -
+                   (real_t(1) - zalfaw) * *plude) *
+                      zgdph_r;
     // ice, negative numbers
-    *(pfcqnng + nproma) += zlneg[NCLDQI] * zgdph_r;
+    pfcqnng[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfcqnng_ + zlneg[NCLDQI] * zgdph_r;
 
     // ice, vertical diffusion
-    *(pfsqitur + nproma) += *pvfi * ptsphy * zgdph_r;
+    pfsqitur[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqitur_ + pvfi_ * ptsphy * zgdph_r;
 
     // snow, LS scheme
-    *(pfsqsf + nproma) += (zqxn2d[NCLDQS] - zqx0[NCLDQS]) * zgdph_r;
+    pfsqsf[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfsqsf_ + (zqxn2d[NCLDQS] - zqx0[NCLDQS]) * zgdph_r;
     // snow, negative numbers
-    *(pfcqsng + nproma) += zlneg[NCLDQS] * zgdph_r;
+    pfcqsng[get_index(descriptor_k1, nproma, jk + 1)] =
+        pfcqsng_ + zlneg[NCLDQS] * zgdph_r;
 
     // Copy general precip arrays back into PFP arrays for GRIB archiving
     // Add rain and liquid fluxes, ice and snow fluxes
-    *(pfplsl + nproma) = zpfplsx[NCLDQR] + zpfplsx[NCLDQL];
-    *(pfplsn + nproma) = zpfplsx[NCLDQS] + zpfplsx[NCLDQI];
+    real_t pfplsl_ = zpfplsx[NCLDQR] + zpfplsx[NCLDQL];
+    pfplsl[get_index(descriptor_k1, nproma, jk + 1)] = pfplsl_;
+    real_t pfplsn_ = zpfplsx[NCLDQS] + zpfplsx[NCLDQI];
+    pfplsn[get_index(descriptor_k1, nproma, jk + 1)] = pfplsn_;
 
     // enthalpy flux due to precipitation
-    *(pfhpsl + nproma) = -yomcst::rlvtt * *(pfplsl + nproma);
-    *(pfhpsn + nproma) = -yomcst::rlstt * *(pfplsn + nproma);
+    pfhpsl[get_index(descriptor_k1, nproma, jk + 1)] = -yomcst::rlvtt * pfplsl_;
+    pfhpsn[get_index(descriptor_k1, nproma, jk + 1)] = -yomcst::rlstt * pfplsn_;
 
     // go to next level
-    plcrit_aer += nproma;
-    picrit_aer += nproma;
-    pre_ice += nproma;
-    pccn += nproma;
-    pnice += nproma;
-    pt += nproma;
-    pq += nproma;
-    pvfl += nproma;
-    pvfi += nproma;
-    phrsw += nproma;
-    phrlw += nproma;
-    pvervel += nproma;
     pap += nproma;
     paph += nproma;
-    plu += nproma;
     plude += nproma;
-    psnde += nproma;
     pmfu += nproma;
     pmfd += nproma;
-    pa += nproma;
-    pclv += nproma;
-    psupsat += nproma;
-    tendency_tmp += nproma;
-    tendency_loc += nproma;
-
-    pcovptot += nproma;
-    pfsqlf += nproma;
-    pfsqif += nproma;
-    pfcqlng += nproma;
-    pfcqnng += nproma;
-    pfsqrf += nproma;
-    pfsqsf += nproma;
-    pfcqrng += nproma;
-    pfcqsng += nproma;
-    pfsqltur += nproma;
-    pfsqitur += nproma;
-    pfplsl += nproma;
-    pfplsn += nproma;
-    pfhpsl += nproma;
-    pfhpsn += nproma;
-    tmp1 += nproma;
-    tmp2 += nproma;
   }
+
+  prainfrac_toprfz += nproma * blockIdx.x + threadIdx.x;
+  *prainfrac_toprfz = prainfrac_toprfz_;
 }
 
 void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
@@ -2040,8 +2022,8 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
     CUDA_CHECK(cudaEventElapsedTime(&time, start, stop));
     time = time / (nreps - 10) / 1000;
     std::cout << "Elapsed time per run [ms]: " << time * 1000 << '\n';
-    std::cout << "Performance [MP/s]:        "
-              << ngptot * klev / time / 1e6 << '\n';
+    std::cout << "Performance [MP/s]:        " << ngptot * klev / time / 1e6
+              << '\n';
   }
 
   CUDA_CHECK(cudaEventDestroy(start));
