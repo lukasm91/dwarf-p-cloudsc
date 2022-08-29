@@ -112,12 +112,6 @@ __global__ void run_cloudsc(
   if (nproma * blockIdx.x + threadIdx.x >= ngptot)
     return;
 
-  pap += klev * nproma * blockIdx.x + threadIdx.x;
-  paph += (klev + 1) * nproma * blockIdx.x + threadIdx.x;
-  plude += klev * nproma * blockIdx.x + threadIdx.x;
-  pmfu += klev * nproma * blockIdx.x + threadIdx.x;
-  pmfd += klev * nproma * blockIdx.x + threadIdx.x;
-
   descriptor descriptor_k = descriptor{nproma, klev, 1};
   descriptor descriptor_k1 = descriptor{nproma, klev + 1, 1};
   descriptor descriptor_tendency = descriptor{nproma, klev, 8};
@@ -125,8 +119,8 @@ __global__ void run_cloudsc(
   descriptor descriptor_2d = descriptor{nproma, 1, 1};
 
   real_t const zqtmst = real_t(1) / ptsphy;
-  real_t const paph_top =
-      *(paph + klev * nproma); // returns paph(jl,klev+1,ibl)
+  real_t const paph_top = paph[get_index(descriptor_k1, nproma, klev)];
+       // returns paph(jl,klev+1,ibl)
 
   // fluxes, summed up towwars the top
   pfsqlf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
@@ -156,6 +150,9 @@ __global__ void run_cloudsc(
   real_t zcldtopdist = 0;
   real_t zpfplsx[NCLV - 1] = {};
   real_t za_prev = std::numeric_limits<real_t>::quiet_NaN();
+  real_t pap_prev = std::numeric_limits<real_t>::quiet_NaN();
+  real_t paph_ = paph[get_index(descriptor_k1, nproma, 0)];
+  real_t pmf_ = pmfu[get_index(descriptor_k, nproma, 0)] + pmfd[get_index(descriptor_k, nproma, 0)];
 
   // rain fraction at top of refreezing layer
   real_t prainfrac_toprfz_ = 0;
@@ -165,6 +162,7 @@ __global__ void run_cloudsc(
     real_t tendency_loc_t_ = 0;
     real_t tendency_loc_q_ = 0;
     real_t tendency_loc_a_ = 0;
+    real_t plude_ = plude[get_index(descriptor_k, nproma, jk)];
 
     // non CLV initialization
     real_t zqx[NCLV];
@@ -235,9 +233,11 @@ __global__ void run_cloudsc(
     ////
     // Define saturation values
 
+    real_t pap_ = pap[get_index(descriptor_k, nproma, jk)];
+    real_t paph_next = paph[get_index(descriptor_k1, nproma, jk+1)];
     // old *diagnostic* mixed phase saturation
     real_t zfoealfa = foealfa(ztp1);
-    real_t zfoeewmt = min(foeewm(ztp1) / *pap, real_t(0.5));
+    real_t zfoeewmt = min(foeewm(ztp1) / pap_, real_t(0.5));
     real_t zqsmix = zfoeewmt;
     zqsmix = zqsmix / (real_t(1) - yomcst::retv * zqsmix);
 
@@ -245,12 +245,12 @@ __global__ void run_cloudsc(
     // liquid water saturation for T>273K
     real_t zalfa = foedelta(ztp1);
     real_t zfoeew = min(
-        (zalfa * foeeliq(ztp1) + (real_t(1) - zalfa) * foeeice(ztp1)) / *pap,
+        (zalfa * foeeliq(ztp1) + (real_t(1) - zalfa) * foeeice(ztp1)) / pap_,
         real_t(0.5));
     real_t zqsice = zfoeew / (real_t(1) - yomcst::retv * zfoeew);
 
     // liquid water saturation
-    real_t zfoeeliqt = min(foeeliq(ztp1) / *pap, real_t(0.5));
+    real_t zfoeeliqt = min(foeeliq(ztp1) / pap_, real_t(0.5));
     real_t zqsliq = zfoeeliqt;
     zqsliq = zqsliq / (real_t(1) - yomcst::retv * zqsliq);
 
@@ -314,9 +314,9 @@ __global__ void run_cloudsc(
       real_t zpsupsatsrce[NCLV] = {};
 
       // derived variables needed
-      real_t zdp = *(paph + nproma) - *paph;    // dp
+      real_t zdp = paph_next - paph_;    // dp
       real_t zgdp = yomcst::rg / zdp;           // g/dp
-      real_t zrho = *pap / (yomcst::rd * ztp1); // p/rt air density
+      real_t zrho = pap_ / (yomcst::rd * ztp1); // p/rt air density
 
       real_t zdtgdp = ptsphy * zgdp;                              // dt g/dp
       real_t zrdtgdp = zdp * (real_t(1) / (ptsphy * yomcst::rg)); // 1/(dt g/dp)
@@ -461,23 +461,23 @@ __global__ void run_cloudsc(
       // [#Note: Should use ZFOEALFACU used in convection rather than ZFOEALFA]
       if (jk < klev - 1 && jk >= yrecldp::ncldtop - 1) {
 
-        *plude *= zdtgdp;
+        plude_ *= zdtgdp;
 
         real_t plu_ = plu[get_index(descriptor_k, nproma, jk + 1)];
         if (ldcum[get_index(descriptor_2d, nproma, 0)] &&
-            *plude > yrecldp::rlmin && plu_ > zepsec) {
+            plude_ > yrecldp::rlmin && plu_ > zepsec) {
 
-          zsolac = zsolac + *plude / plu_;
+          zsolac = zsolac + plude_ / plu_;
           // *diagnostic temperature split*
           zalfaw = zfoealfa;
-          zconvsrce[NCLDQL] = zalfaw * *plude;
-          zconvsrce[NCLDQI] = (real_t(1) - zalfaw) * *plude;
+          zconvsrce[NCLDQL] = zalfaw * plude_;
+          zconvsrce[NCLDQI] = (real_t(1) - zalfaw) * plude_;
           zsolqa[NCLDQL][NCLDQL] += zconvsrce[NCLDQL];
           zsolqa[NCLDQI][NCLDQI] += zconvsrce[NCLDQI];
 
         } else {
 
-          *plude = real_t(0);
+          plude_ = real_t(0);
         }
         // *convective snow detrainment source
         if (ldcum[get_index(descriptor_2d, nproma, 0)])
@@ -500,12 +500,12 @@ __global__ void run_cloudsc(
         // since there is no prognostic memory for in-cloud humidity, i.e.
         // we always assume cloud is saturated.
 
-        real_t zdtdp = (zrdcp * real_t(0.5) * (ztp1_prev + ztp1)) / *paph;
-        real_t zdtforc = zdtdp * (*pap - *(pap - nproma));
+        real_t zdtdp = (zrdcp * real_t(0.5) * (ztp1_prev + ztp1)) / paph_;
+        real_t zdtforc = zdtdp * (pap_ - pap_prev);
         //[#Note: Diagnostic mixed phase should be replaced below]
         real_t zdqs = zanewm1 * zdtforc * zdqsmixdt;
 
-        real_t zmf = max(real_t(0), (*pmfu + *pmfd) * zdtgdp);
+        real_t zmf = max(real_t(0), pmf_ * zdtgdp);
 
         real_t zlfinalsum = real_t(0);
 
@@ -537,12 +537,13 @@ __global__ void run_cloudsc(
         zsolac += zacust;
       }
 
+      real_t pmf_next = pmfu[get_index(descriptor_k, nproma, jk+1)] + pmfd[get_index(descriptor_k, nproma, jk+1)];
       // Subsidence sink of cloud to the layer below
       // (Implicit - re. CFL limit on convective mass flux)
       if (jk < klev - 1) {
 
         real_t zmfdn =
-            max(real_t(0), (*(pmfu + nproma) + *(pmfd + nproma)) * zdtgdp);
+            max(real_t(0), pmf_next * zdtgdp);
 
         zsolab = zsolab + zmfdn;
         zsolqb[NCLDQL][NCLDQL] += zmfdn;
@@ -561,7 +562,7 @@ __global__ void run_cloudsc(
       // Define turbulent erosion rate
       real_t zldifdt = yrecldp::rcldiff * ptsphy; // original version
       // Increase by factor of 5 for convective points
-      if (ktype[get_index(descriptor_2d, nproma, 0)] > 0 && *plude > zepsec)
+      if (ktype[get_index(descriptor_2d, nproma, 0)] > 0 && plude_ > zepsec)
         zldifdt = yrecldp::rcldiff_convi * zldifdt;
 
       // At the moment, works on mixed RH profile and partitioned ice/liq
@@ -602,13 +603,14 @@ __global__ void run_cloudsc(
       // Thus for the initial implementation the diagnostic mixed phase is
       // retained for the moment, and the level of approximation noted.
 
-      real_t zdtdp = (zrdcp * ztp1) / *pap;
+      real_t zdtdp = (zrdcp * ztp1) / pap_;
       real_t zdpmxdt = zdp * zqtmst;
       real_t zmfdn = real_t(0);
       if (jk < klev - 1)
-        zmfdn = *(pmfu + nproma) + *(pmfd + nproma);
+        zmfdn = pmf_next;
       real_t zwtot = pvervel[get_index(descriptor_k, nproma, jk)] +
-                     real_t(0.5) * yomcst::rg * (*pmfu + *pmfd + zmfdn);
+                     real_t(0.5) * yomcst::rg * (pmf_ + zmfdn);
+      pmf_ = pmf_next;
       zwtot = min(zdpmxdt, max(-zdpmxdt, zwtot));
       real_t zzzdt = phrsw[get_index(descriptor_k, nproma, jk)] +
                      phrlw[get_index(descriptor_k, nproma, jk)];
@@ -625,7 +627,7 @@ __global__ void run_cloudsc(
       ztp1 = max(ztp1, real_t(160));
 
       // Formerly a call to CUADJTQ(..., ICALL=5)
-      real_t zqp = real_t(1) / *pap;
+      real_t zqp = real_t(1) / pap_;
       real_t zqsat = foeewm(ztp1) * zqp;
       zqsat = min(real_t(0.5), zqsat);
       zcor = real_t(1) / (real_t(1) - yomcst::retv * zqsat);
@@ -710,7 +712,7 @@ __global__ void run_cloudsc(
 
         // Critical relative humidity
         real_t zrhc = yrecldp::ramid;
-        real_t zsigk = *pap / paph_top;
+        real_t zsigk = pap_ / paph_top;
         // Increase RHcrit to 1.0 towards the surface (eta>0.8)
         if (zsigk > real_t(0.8))
           zrhc = yrecldp::ramid + (real_t(1) - yrecldp::ramid) *
@@ -830,7 +832,7 @@ __global__ void run_cloudsc(
           real_t zadd = (yomcst::rlstt *
                          (yomcst::rlstt / ((yomcst::rv * ztp1)) - real_t(1))) /
                         ((real_t(2.4e-2) * ztp1));
-          real_t zbdd = (yomcst::rv * ztp1 * *pap) / ((real_t(2.21) * zvpice));
+          real_t zbdd = (yomcst::rv * ztp1 * pap_) / ((real_t(2.21) * zvpice));
           real_t zcvds = (real_t(7.8) * pow(zicenuclei / zrho, real_t(0.666)) *
                           (zvpliq - zvpice)) /
                          ((real_t(8.87) * (zadd + zbdd) * zvpice));
@@ -907,7 +909,7 @@ __global__ void run_cloudsc(
 
           real_t zaplusb = yrecldp::rcl_apb1 * zvpice -
                            yrecldp::rcl_apb2 * zvpice * ztp1 +
-                           *pap * yrecldp::rcl_apb3 * pow(ztp1, real_t(3));
+                           pap_ * yrecldp::rcl_apb3 * pow(ztp1, real_t(3));
           real_t zcorrfac = pow(real_t(1) / zrho, real_t(0.5));
           real_t zcorrfac2 = pow(ztp1 / real_t(273.0), real_t(1.5)) *
                              (real_t(393) / (ztp1 + real_t(120)));
@@ -1236,7 +1238,7 @@ __global__ void run_cloudsc(
         // evaporation.
         real_t ztdmtw0 =
             ztp1 - yomcst::rtt -
-            zsubsat * (ZTW1 + ZTW2 * (*pap - ZTW3) - ZTW4 * (ztp1 - ZTW5));
+            zsubsat * (ZTW1 + ZTW2 * (pap_ - ZTW3) - ZTW4 * (ztp1 - ZTW5));
         // Not implicit yet...
         // Ensure ZCONS1 is positive so that ZMELTMAX=0 if ZTDMTW0<0
         real_t zcons1 = abs((ptsphy * (real_t(1) + real_t(0.5) * ztdmtw0)) /
@@ -1350,7 +1352,7 @@ __global__ void run_cloudsc(
 
           // actual microphysics formula in zbeta
           real_t zbeta1 =
-              ((sqrt(*pap / paph_top) / yrecldp::rvrfactor) * zpreclr) /
+              ((sqrt(pap_ / paph_top) / yrecldp::rvrfactor) * zpreclr) /
               max(zcovpclr, zepsec);
 
           real_t zbeta = yomcst::rg * yrecldp::rpecons * real_t(0.5) *
@@ -1431,7 +1433,7 @@ __global__ void run_cloudsc(
           real_t zevap_denom =
               yrecldp::rcl_cdenom1 * zesatliq -
               yrecldp::rcl_cdenom2 * ztp1 * zesatliq +
-              yrecldp::rcl_cdenom3 * pow(ztp1, real_t(3)) * *pap;
+              yrecldp::rcl_cdenom3 * pow(ztp1, real_t(3)) * pap_;
 
           // Temperature dependent conductivity
           real_t zcorr2 = (pow(ztp1 / real_t(273), real_t(1.5)) * real_t(393)) /
@@ -1496,7 +1498,7 @@ __global__ void run_cloudsc(
           // actual microphysics formula in zbeta
 
           real_t zbeta1 =
-              ((sqrt(*pap / paph_top) / yrecldp::rvrfactor) * zpreclr) /
+              ((sqrt(pap_ / paph_top) / yrecldp::rvrfactor) * zpreclr) /
               max(zcovpclr, zepsec);
 
           real_t zbeta =
@@ -1554,7 +1556,7 @@ __global__ void run_cloudsc(
 
           real_t zaplusb = yrecldp::rcl_apb1 * zvpice -
                            yrecldp::rcl_apb2 * zvpice * ztp1 +
-                           *pap * yrecldp::rcl_apb3 * pow(ztp1, 3);
+                           pap_ * yrecldp::rcl_apb3 * pow(ztp1, 3);
           real_t zcorrfac = pow(real_t(1) / zrho, real_t(0.5));
           real_t zcorrfac2 = pow(ztp1 / real_t(273.0), real_t(1.5)) *
                              (real_t(393) / (ztp1 + real_t(120)));
@@ -1827,15 +1829,12 @@ __global__ void run_cloudsc(
     tendency_loc[get_index(descriptor_tendency, nproma, jk, POS_Q)] =
         tendency_loc_q_;
 
-    ztp1_prev = ztp1;
-    za_prev = za;
-
     //                      END OF VERTICAL LOOP
 
     //////////
     //             8  *** FLUX/DIAGNOSTICS COMPUTATIONS ***
 
-    real_t zgdph_r = -zrg_r * (*(paph + nproma) - *paph) * zqtmst;
+    real_t zgdph_r = -zrg_r * (paph_next - paph_) * zqtmst;
     real_t pfsqlf_ = pfsqlf[get_index(descriptor_k1, nproma, jk)];
     real_t pfsqrf_ = pfsqlf_;
     real_t pfsqif_ = pfsqif[get_index(descriptor_k1, nproma, jk)];
@@ -1853,7 +1852,7 @@ __global__ void run_cloudsc(
     real_t pvfl_ = pvfl[get_index(descriptor_k, nproma, jk)];
     pfsqlf[get_index(descriptor_k1, nproma, jk + 1)] =
         pfsqlf_ +
-        (zqxn2d[NCLDQL] - zqx0[NCLDQL] + pvfl_ * ptsphy - zalfaw * *plude) *
+        (zqxn2d[NCLDQL] - zqx0[NCLDQL] + pvfl_ * ptsphy - zalfaw * plude_) *
             zgdph_r;
     // liquid, negative numbers
     pfcqlng[get_index(descriptor_k1, nproma, jk + 1)] =
@@ -1874,7 +1873,7 @@ __global__ void run_cloudsc(
     real_t pvfi_ = pvfi[get_index(descriptor_k, nproma, jk)];
     pfsqif[get_index(descriptor_k1, nproma, jk + 1)] =
         pfsqif_ + (zqxn2d[NCLDQI] - zqx0[NCLDQI] + pvfi_ * ptsphy -
-                   (real_t(1) - zalfaw) * *plude) *
+                   (real_t(1) - zalfaw) * plude_) *
                       zgdph_r;
     // ice, negative numbers
     pfcqnng[get_index(descriptor_k1, nproma, jk + 1)] =
@@ -1902,16 +1901,15 @@ __global__ void run_cloudsc(
     pfhpsl[get_index(descriptor_k1, nproma, jk + 1)] = -yomcst::rlvtt * pfplsl_;
     pfhpsn[get_index(descriptor_k1, nproma, jk + 1)] = -yomcst::rlstt * pfplsn_;
 
-    // go to next level
-    pap += nproma;
-    paph += nproma;
-    plude += nproma;
-    pmfu += nproma;
-    pmfd += nproma;
+    ztp1_prev = ztp1;
+    za_prev = za;
+    pap_prev = pap_;
+    paph_ = paph_next;
+
+    plude[get_index(descriptor_k, nproma, jk)] = plude_;
   }
 
-  prainfrac_toprfz += nproma * blockIdx.x + threadIdx.x;
-  *prainfrac_toprfz = prainfrac_toprfz_;
+  prainfrac_toprfz[get_index(descriptor_2d, nproma, 0)] = prainfrac_toprfz_;
 }
 
 void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
