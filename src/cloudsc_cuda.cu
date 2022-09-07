@@ -74,12 +74,22 @@ constexpr int POS_CLD = 3;
     LAST3D = PLUDE,
     LAST3DSTAGE = stages_count * LAST3D,
 
-    // 2D
-    LDCUM,
+    // No multi buffer
+    LDCUM = LAST3DSTAGE + 1,
     KTYPE,
     PLSM,
-    LAST2D = PLSM,
+    PFSQLF,
+    PFSQIF,
+    PFCQLNG,
+    PFCQNNG,
+    PFSQLTUR,
+    PFSQITUR,
+    LAST2D = PFSQITUR,
+
     TOTAL = LAST2D + 1,
+    TOTAL3D = LAST3D + 1,
+
+
   };
 //template <int > class X{};
 //using notype = typename X<TOTAL>::notype;
@@ -175,6 +185,12 @@ __global__ void run_cloudsc(
   auto pipeline = cuda::make_pipeline(block, &shared_state);
 
   // fluxes, summed up towwars the top
+  shared[SHARED::PFSQLF * nproma + threadIdx.x] = 0;
+  shared[SHARED::PFSQIF * nproma + threadIdx.x] = 0;
+  shared[SHARED::PFCQLNG * nproma + threadIdx.x] = 0;
+  shared[SHARED::PFCQNNG * nproma + threadIdx.x] = 0;
+  shared[SHARED::PFSQLTUR * nproma + threadIdx.x] = 0;
+  shared[SHARED::PFSQITUR * nproma + threadIdx.x] = 0;
   pfsqlf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
   pfsqif[get_index(descriptor_k1, nproma, 0)] = real_t(0);
   pfsqrf[get_index(descriptor_k1, nproma, 0)] = real_t(0);
@@ -1955,31 +1971,34 @@ __global__ void run_cloudsc(
     //             8  *** FLUX/DIAGNOSTICS COMPUTATIONS ***
 
     real_t zgdph_r = -zrg_r * (paph_next - paph_) * zqtmst;
-    real_t pfsqlf_ = pfsqlf[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqlf_ = shared[SHARED::PFSQLF * nproma + threadIdx.x];
     real_t pfsqrf_ = pfsqlf_;
-    real_t pfsqif_ = pfsqif[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqif_ = shared[SHARED::PFSQIF * nproma + threadIdx.x];
     real_t pfsqsf_ = pfsqif_;
-    real_t pfcqlng_ = pfcqlng[get_index(descriptor_k1, nproma, jk)];
-    real_t pfcqnng_ = pfcqnng[get_index(descriptor_k1, nproma, jk)];
+    real_t pfcqlng_ = shared[SHARED::PFCQLNG * nproma + threadIdx.x];
+    real_t pfcqnng_ = shared[SHARED::PFCQNNG * nproma + threadIdx.x];
     real_t pfcqrng_ = pfcqlng_;
     real_t pfcqsng_ = pfcqnng_;
-    real_t pfsqltur_ = pfsqltur[get_index(descriptor_k1, nproma, jk)];
-    real_t pfsqitur_ = pfsqitur[get_index(descriptor_k1, nproma, jk)];
+    real_t pfsqltur_ = shared[SHARED::PFSQLTUR * nproma + threadIdx.x];
+    real_t pfsqitur_ = shared[SHARED::PFSQITUR * nproma + threadIdx.x];
 
     real_t zalfaw = zfoealfa;
 
     // Liquid , LS scheme minus detrainment
     real_t pvfl_ = shared[SHARED::PVFL * nproma + threadIdx.x];
     pfsqlf[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFSQLF * nproma + threadIdx.x] =
         pfsqlf_ +
         (zqxn2d[NCLDQL] - zqx0[NCLDQL] + pvfl_ * ptsphy - zalfaw * plude_) *
             zgdph_r;
     // liquid, negative numbers
     pfcqlng[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFCQLNG * nproma + threadIdx.x] =
         pfcqlng_ + zlneg[NCLDQL] * zgdph_r;
 
     // liquid, vertical diffusion
     pfsqltur[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFSQLTUR * nproma + threadIdx.x] =
         pfsqltur_ + pvfl_ * ptsphy * zgdph_r;
 
     // Rain, LS scheme
@@ -1992,15 +2011,18 @@ __global__ void run_cloudsc(
     // Ice , LS scheme minus detrainment
     real_t pvfi_ = shared[SHARED::PVFI * nproma + threadIdx.x];
     pfsqif[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFSQIF * nproma + threadIdx.x] =
         pfsqif_ + (zqxn2d[NCLDQI] - zqx0[NCLDQI] + pvfi_ * ptsphy -
                    (real_t(1) - zalfaw) * plude_) *
                       zgdph_r;
     // ice, negative numbers
     pfcqnng[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFCQNNG * nproma + threadIdx.x] =
         pfcqnng_ + zlneg[NCLDQI] * zgdph_r;
 
     // ice, vertical diffusion
     pfsqitur[get_index(descriptor_k1, nproma, jk + 1)] =
+        shared[PFSQITUR * nproma + threadIdx.x] =
         pfsqitur_ + pvfi_ * ptsphy * zgdph_r;
 
     // snow, LS scheme
