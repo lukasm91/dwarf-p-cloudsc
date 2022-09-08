@@ -116,7 +116,7 @@ inline __device__ int get_index_block(descriptor const &d, int nproma, int ki,
 
 template <int nproma>
 inline __device__ void
-copy(cuda::pipeline<cuda::thread_scope::thread_scope_block> &pipeline,
+copy(cuda::pipeline<cuda::thread_scope::thread_scope_thread> &pipeline,
      descriptor const &d, real_t *__restrict__ ptr, int const spos,
      int const ki, int const fi = 0) {
   extern __shared__ real_t shared[];
@@ -192,10 +192,7 @@ __global__ void run_cloudsc(
   auto grid = cooperative_groups::this_grid();
   auto block = cooperative_groups::this_thread_block();
 
-  __shared__ cuda::pipeline_shared_state<cuda::thread_scope::thread_scope_block,
-                                         stage_count>
-      shared_state;
-  auto pipeline = cuda::make_pipeline(block, &shared_state);
+  auto pipeline = cuda::make_pipeline();
 
   // fluxes, summed up towwars the top
   at_shared<nproma>(SHARED::PFSQLF) = 0;
@@ -325,6 +322,7 @@ __global__ void run_cloudsc(
     real_t tendency_loc_a_ = 0;
 
     pipeline.consumer_wait();
+    block.sync();
 
     // non CLV initialization
     real_t zqx[NCLV];
@@ -2070,7 +2068,7 @@ __global__ void run_cloudsc(
     plude[get_index(descriptor_k, nproma, jk)] = plude_;
     pipeline.consumer_release();
 
-    __syncthreads();
+    block.sync();
   }
 
   prainfrac_toprfz[get_index(descriptor_2d, nproma, 0)] = prainfrac_toprfz_;
