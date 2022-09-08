@@ -123,7 +123,7 @@ copy(cuda::pipeline<cuda::thread_scope::thread_scope_block> &pipeline,
   cuda::memcpy_async(cooperative_groups::this_thread_block(),
                      shared + spos * nproma,
                      &ptr[get_index_block(d, nproma, ki, fi)],
-                     sizeof(*ptr) * nproma, pipeline);
+                     cuda::aligned_size_t<64>(sizeof(*ptr) * nproma), pipeline);
 }
 template <int nproma> inline __device__ real_t &at_shared(int const spos) {
   extern __shared__ real_t shared[];
