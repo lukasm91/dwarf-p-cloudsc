@@ -48,7 +48,8 @@ constexpr int POS_Q = 1;
 constexpr int POS_A = 2;
 constexpr int POS_CLD = 3;
 
-constexpr size_t stage_count = 1;
+constexpr size_t stage_count = 2;
+constexpr size_t smem_count = stage_count;
 enum SHARED {
   PT,
   PQ,
@@ -71,11 +72,13 @@ enum SHARED {
   PVFL,
   PVFI,
   PLUDE,
-  LAST3D = PLUDE,
-  LAST3DSTAGE = stage_count * LAST3D,
 
-  // No multi buffer
-  LDCUM = LAST3DSTAGE + 1,
+  LAST3D = PLUDE,
+  TOTAL3D = LAST3D + 1,
+  FIRST2D = smem_count * TOTAL3D,
+
+  // No multi-stage buffer
+  LDCUM = FIRST2D,
   KTYPE,
   PLSM,
   PFSQLF,
@@ -84,10 +87,9 @@ enum SHARED {
   PFCQNNG,
   PFSQLTUR,
   PFSQITUR,
-  LAST2D = PFSQITUR,
 
+  LAST2D = PFSQITUR,
   TOTAL = LAST2D + 1,
-  TOTAL3D = LAST3D + 1,
 
 };
 // template <int > class X{};
@@ -118,16 +120,20 @@ template <int nproma>
 inline __device__ void
 copy(cuda::pipeline<cuda::thread_scope::thread_scope_thread> &pipeline,
      descriptor const &d, real_t *__restrict__ ptr, int const spos,
-     int const ki, int const fi = 0) {
+     int const ki, int const koffset = 0, int const fi = 0) {
   extern __shared__ real_t shared[];
+  int stage = ki % smem_count;
   cuda::memcpy_async(cooperative_groups::this_thread_block(),
-                     shared + spos * nproma,
-                     &ptr[get_index_block(d, nproma, ki, fi)],
-                     cuda::aligned_size_t<64>(sizeof(*ptr) * nproma), pipeline);
+                     shared + stage * SHARED::TOTAL3D * nproma + spos * nproma,
+                     &ptr[get_index_block(d, nproma, ki + koffset, fi)],
+                     cuda::aligned_size_t<128>(sizeof(*ptr) * nproma),
+                     pipeline);
 }
-template <int nproma> inline __device__ real_t &at_shared(int const spos) {
+template <int nproma>
+inline __device__ real_t &at_shared(int const spos, int const jk = 0) {
   extern __shared__ real_t shared[];
-  return shared[spos * nproma + threadIdx.x];
+  int stage = jk % smem_count;
+  return shared[stage * SHARED::TOTAL3D * nproma + spos * nproma + threadIdx.x];
 }
 
 // ---------------------------------------------------------------------
@@ -176,7 +182,7 @@ __global__ void run_cloudsc(
     real_t *__restrict__ pfhpsn, real_t *__restrict__ tmp1,
     real_t *__restrict__ tmp2, real_t ptsphy, bool ldslphy) {
 
-  if (nproma * blockIdx.x + threadIdx.x * 0 >= ngptot)
+  if (nproma * blockIdx.x + threadIdx.x >= ngptot)
     return;
 
   descriptor descriptor_k = descriptor{nproma, klev, 1};
@@ -243,22 +249,36 @@ __global__ void run_cloudsc(
     copy<nproma>(pipeline, descriptor_k, pq, SHARED::PQ, jk);
     copy<nproma>(pipeline, descriptor_k, pa, SHARED::PA, jk);
     copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_T,
-                 jk, POS_T);
+                 jk, 0, POS_T);
     copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_Q,
-                 jk, POS_Q);
+                 jk, 0, POS_Q);
     copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_A,
-                 jk, POS_A);
+                 jk, 0, POS_A);
 #pragma unroll
     for (int jm = 0; jm < NCLV - 1; ++jm) {
-      copy<nproma>(pipeline, descriptor_pclv, pclv, SHARED::PCLV + jm, jk, jm);
+      copy<nproma>(pipeline, descriptor_pclv, pclv, SHARED::PCLV + jm, jk, 0,
+                   jm);
       copy<nproma>(pipeline, descriptor_tendency, tendency_tmp,
-                   SHARED::TEND_CLD + jm, jk, POS_CLD + jm);
+                   SHARED::TEND_CLD + jm, jk, 0, POS_CLD + jm);
     }
     copy<nproma>(pipeline, descriptor_k, pap, SHARED::PAP, jk);
-    copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, jk + 1);
+    copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, jk, 1);
     copy<nproma>(pipeline, descriptor_k, pvfl, SHARED::PVFL, jk);
     copy<nproma>(pipeline, descriptor_k, pvfi, SHARED::PVFI, jk);
     copy<nproma>(pipeline, descriptor_k, plude, SHARED::PLUDE, jk);
+
+    if (jk >= yrecldp::ncldtop - 1) {
+      copy<nproma>(pipeline, descriptor_k, psupsat, SHARED::PSUPSAT, jk);
+      if (jk < klev - 1) {
+        copy<nproma>(pipeline, descriptor_k, plu, SHARED::PLU, jk, 1);
+        copy<nproma>(pipeline, descriptor_k, psnde, SHARED::PSNDE, jk);
+        copy<nproma>(pipeline, descriptor_k, pmfu, SHARED::PMFU, jk, 1);
+        copy<nproma>(pipeline, descriptor_k, pmfd, SHARED::PMFD, jk, 1);
+      }
+      copy<nproma>(pipeline, descriptor_k, pvervel, SHARED::PVERVEL, jk);
+      copy<nproma>(pipeline, descriptor_k, phrsw, SHARED::PHRSW, jk);
+      copy<nproma>(pipeline, descriptor_k, phrlw, SHARED::PHRLW, jk);
+    }
 
     if (jk == 0) {
       copy<nproma>(pipeline, descriptor_2d, ldcum, SHARED::LDCUM, jk);
@@ -277,20 +297,20 @@ __global__ void run_cloudsc(
       copy<nproma>(pipeline, descriptor_k, pq, SHARED::PQ, to_load);
       copy<nproma>(pipeline, descriptor_k, pa, SHARED::PA, to_load);
       copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_T,
-                   to_load, POS_T);
+                   to_load, 0, POS_T);
       copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_Q,
-                   to_load, POS_Q);
+                   to_load, 0, POS_Q);
       copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_A,
-                   to_load, POS_A);
+                   to_load, 0, POS_A);
 #pragma unroll
       for (int jm = 0; jm < NCLV - 1; ++jm) {
         copy<nproma>(pipeline, descriptor_pclv, pclv, SHARED::PCLV + jm,
-                     to_load, jm);
+                     to_load, 0, jm);
         copy<nproma>(pipeline, descriptor_tendency, tendency_tmp,
-                     SHARED::TEND_CLD + jm, to_load, POS_CLD + jm);
+                     SHARED::TEND_CLD + jm, to_load, 0, POS_CLD + jm);
       }
       copy<nproma>(pipeline, descriptor_k, pap, SHARED::PAP, to_load);
-      copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, to_load + 1);
+      copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, to_load, 1);
       copy<nproma>(pipeline, descriptor_k, pvfl, SHARED::PVFL, to_load);
       copy<nproma>(pipeline, descriptor_k, pvfi, SHARED::PVFI, to_load);
       copy<nproma>(pipeline, descriptor_k, plude, SHARED::PLUDE, to_load);
@@ -298,10 +318,10 @@ __global__ void run_cloudsc(
       if (to_load >= yrecldp::ncldtop - 1) {
         copy<nproma>(pipeline, descriptor_k, psupsat, SHARED::PSUPSAT, to_load);
         if (to_load < klev - 1) {
-          copy<nproma>(pipeline, descriptor_k, plu, SHARED::PLU, to_load + 1);
+          copy<nproma>(pipeline, descriptor_k, plu, SHARED::PLU, to_load, 1);
           copy<nproma>(pipeline, descriptor_k, psnde, SHARED::PSNDE, to_load);
-          copy<nproma>(pipeline, descriptor_k, pmfu, SHARED::PMFU, to_load + 1);
-          copy<nproma>(pipeline, descriptor_k, pmfd, SHARED::PMFD, to_load + 1);
+          copy<nproma>(pipeline, descriptor_k, pmfu, SHARED::PMFU, to_load, 1);
+          copy<nproma>(pipeline, descriptor_k, pmfd, SHARED::PMFD, to_load, 1);
         }
         copy<nproma>(pipeline, descriptor_k, pvervel, SHARED::PVERVEL, to_load);
         copy<nproma>(pipeline, descriptor_k, phrsw, SHARED::PHRSW, to_load);
@@ -326,12 +346,12 @@ __global__ void run_cloudsc(
 
     // non CLV initialization
     real_t zqx[NCLV];
-    real_t ztp1 = at_shared<nproma>(SHARED::PT) +
-                  ptsphy * at_shared<nproma>(SHARED::TEND_T);
-    zqx[NCLDQV] = at_shared<nproma>(SHARED::PQ) +
-                  ptsphy * at_shared<nproma>(SHARED::TEND_Q);
-    real_t pa_ = at_shared<nproma>(SHARED::PA);
-    real_t tendency_tmp_a_ = at_shared<nproma>(SHARED::TEND_A);
+    real_t ztp1 = at_shared<nproma>(SHARED::PT, jk) +
+                  ptsphy * at_shared<nproma>(SHARED::TEND_T, jk);
+    zqx[NCLDQV] = at_shared<nproma>(SHARED::PQ, jk) +
+                  ptsphy * at_shared<nproma>(SHARED::TEND_Q, jk);
+    real_t pa_ = at_shared<nproma>(SHARED::PA, jk);
+    real_t tendency_tmp_a_ = at_shared<nproma>(SHARED::TEND_A, jk);
     real_t za = pa_ + ptsphy * tendency_tmp_a_;
     real_t zaorig = pa_ + ptsphy * tendency_tmp_a_;
 
@@ -339,8 +359,8 @@ __global__ void run_cloudsc(
     real_t zqx0[NCLV - 1];
 #pragma unroll
     for (int jm = 0; jm < NCLV - 1; ++jm) {
-      zqx[jm] = at_shared<nproma>(SHARED::PCLV + jm) +
-                ptsphy * at_shared<nproma>(SHARED::TEND_CLD + jm);
+      zqx[jm] = at_shared<nproma>(SHARED::PCLV + jm, jk) +
+                ptsphy * at_shared<nproma>(SHARED::TEND_CLD + jm, jk);
       zqx0[jm] = zqx[jm];
     }
 
@@ -387,8 +407,8 @@ __global__ void run_cloudsc(
     ////
     // Define saturation values
 
-    real_t pap_ = at_shared<nproma>(SHARED::PAP);
-    real_t paph_next = at_shared<nproma>(SHARED::PAPH);
+    real_t pap_ = at_shared<nproma>(SHARED::PAP, jk);
+    real_t paph_next = at_shared<nproma>(SHARED::PAPH, jk);
     // old *diagnostic* mixed phase saturation
     real_t zfoealfa = foealfa(ztp1);
     real_t zfoeewmt = min(foeewm(ztp1) / pap_, real_t(0.5));
@@ -426,7 +446,7 @@ __global__ void run_cloudsc(
     }
 
     real_t zqxn2d[NCLV - 1];
-    real_t plude_ = at_shared<nproma>(SHARED::PLUDE);
+    real_t plude_ = at_shared<nproma>(SHARED::PLUDE, jk);
     if (jk >= yrecldp::ncldtop - 1) {
 
       //////
@@ -583,7 +603,7 @@ __global__ void run_cloudsc(
 
       // 3.1.3 Include supersaturation from previous timestep
       // (Calculated in sltENDIF semi-lagrangian LDSLPHY=T)
-      real_t psupsat_ = at_shared<nproma>(SHARED::PSUPSAT);
+      real_t psupsat_ = at_shared<nproma>(SHARED::PSUPSAT, jk);
       if (psupsat_ > zepsec) {
         if (ztp1 > yrecldp::rthomo) {
           // Turn supersaturation into liquid water
@@ -618,7 +638,7 @@ __global__ void run_cloudsc(
 
         plude_ *= zdtgdp;
 
-        real_t plu_ = at_shared<nproma>(SHARED::PLU);
+        real_t plu_ = at_shared<nproma>(SHARED::PLU, jk);
         bool ldcum_ = at_shared<nproma>(SHARED::LDCUM);
         if (ldcum_ && plude_ > yrecldp::rlmin && plu_ > zepsec) {
 
@@ -636,7 +656,8 @@ __global__ void run_cloudsc(
         }
         // *convective snow detrainment source
         if (ldcum_)
-          zsolqa[NCLDQS][NCLDQS] += at_shared<nproma>(SHARED::PSNDE) * zdtgdp;
+          zsolqa[NCLDQS][NCLDQS] +=
+              at_shared<nproma>(SHARED::PSNDE, jk) * zdtgdp;
       }
       //  3.3  SUBSIDENCE COMPENSATING CONVECTIVE UPDRAUGHTS
       // Three terms:
@@ -695,8 +716,8 @@ __global__ void run_cloudsc(
       // Subsidence sink of cloud to the layer below
       // (Implicit - re. CFL limit on convective mass flux)
       if (jk < klev - 1) {
-        pmf_next =
-            at_shared<nproma>(SHARED::PMFU) + at_shared<nproma>(SHARED::PMFD);
+        pmf_next = at_shared<nproma>(SHARED::PMFU, jk) +
+                   at_shared<nproma>(SHARED::PMFD, jk);
 
         real_t zmfdn = max(real_t(0), pmf_next * zdtgdp);
 
@@ -763,13 +784,13 @@ __global__ void run_cloudsc(
       real_t zmfdn = real_t(0);
       if (jk < klev - 1)
         zmfdn = pmf_next;
-      real_t zwtot = at_shared<nproma>(SHARED::PVERVEL) +
+      real_t zwtot = at_shared<nproma>(SHARED::PVERVEL, jk) +
                      real_t(0.5) * yomcst::rg * (pmf_ + zmfdn);
       if (jk < klev - 1)
         pmf_ = pmf_next;
       zwtot = min(zdpmxdt, max(-zdpmxdt, zwtot));
-      real_t zzzdt =
-          at_shared<nproma>(SHARED::PHRSW) + at_shared<nproma>(SHARED::PHRLW);
+      real_t zzzdt = at_shared<nproma>(SHARED::PHRSW, jk) +
+                     at_shared<nproma>(SHARED::PHRLW, jk);
       real_t zdtdiab =
           min(zdpmxdt * zdtdp, max(-zdpmxdt * zdtdp, zzzdt)) * ptsphy +
           yoethf::ralfdcp * zldefr;
@@ -2006,7 +2027,7 @@ __global__ void run_cloudsc(
     real_t zalfaw = zfoealfa;
 
     // Liquid , LS scheme minus detrainment
-    real_t pvfl_ = at_shared<nproma>(SHARED::PVFL);
+    real_t pvfl_ = at_shared<nproma>(SHARED::PVFL, jk);
     pfsqlf[get_index(descriptor_k1, nproma, jk + 1)] =
         at_shared<nproma>(PFSQLF) =
             pfsqlf_ +
@@ -2028,7 +2049,7 @@ __global__ void run_cloudsc(
         pfcqrng_ + zlneg[NCLDQR] * zgdph_r;
 
     // Ice , LS scheme minus detrainment
-    real_t pvfi_ = at_shared<nproma>(SHARED::PVFI);
+    real_t pvfi_ = at_shared<nproma>(SHARED::PVFI, jk);
     pfsqif[get_index(descriptor_k1, nproma, jk + 1)] =
         at_shared<nproma>(PFSQIF) =
             pfsqif_ + (zqxn2d[NCLDQI] - zqx0[NCLDQI] + pvfi_ * ptsphy -
@@ -2138,8 +2159,17 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
   decltype(&run_cloudsc<1, 1, 1, 1, 1>) fptr = nullptr;
 
   if (config == 1)
-    fptr = nproma == 64 ? run_cloudsc<2, 2, 1, 1, 64>
-                        : run_cloudsc<2, 2, 1, 1, 128>;
+    switch (nproma) {
+    case 64:
+      fptr = run_cloudsc<2, 2, 1, 1, 64>;
+      break;
+    case 128:
+      fptr = run_cloudsc<2, 2, 1, 1, 128>;
+      break;
+    case 256:
+      fptr = run_cloudsc<2, 2, 1, 1, 256>;
+      break;
+    }
   /*
   else if (config == 2)
     fptr = run_cloudsc<1, 2, 1, 1>;
@@ -2160,10 +2190,16 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
   CUDA_CHECK(cudaEventCreate(&stop));
   int nreps = perftest ? 30 : 1;
 
+  int smem_size = SHARED::TOTAL * nproma * sizeof(real_t);
+
+  // CUDA_CHECK(cudaFuncSetCacheConfig(fptr, cudaFuncCachePreferShared));
+  CUDA_CHECK(cudaFuncSetAttribute(
+      fptr, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+
   for (int i = 0; i < nreps; ++i) {
     if (i == 10)
       CUDA_CHECK(cudaEventRecord(start));
-    fptr<<<nblocks, nthreads, SHARED::TOTAL * nproma * sizeof(real_t)>>>(
+    fptr<<<nblocks, nthreads, smem_size>>>(
         klev, ngptot, nproma, plcrit_aer.get(), picrit_aer.get(), pre_ice.get(),
         pccn.get(), pnice.get(), pt.get(), pq.get(), pvfl.get(), pvfi.get(),
         phrsw.get(), phrlw.get(), pvervel.get(), pap.get(), paph.get(),
@@ -2175,6 +2211,7 @@ void run(int klev, int ngptot, int nproma, py::dict c, py::dict f, py::dict s,
         pfcqsng.get(), pfsqltur.get(), pfsqitur.get(), pfplsl.get(),
         pfplsn.get(), pfhpsl.get(), pfhpsn.get(), tmp1.get(), tmp2.get(),
         ptsphy, ldslphy);
+    CUDA_CHECK(cudaGetLastError());
   }
   if (nreps > 1)
     CUDA_CHECK(cudaEventRecord(stop));
