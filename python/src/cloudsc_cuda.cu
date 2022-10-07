@@ -48,7 +48,7 @@ constexpr int POS_Q = 1;
 constexpr int POS_A = 2;
 constexpr int POS_CLD = 3;
 
-constexpr size_t stage_count = 3;
+constexpr size_t stage_count = 2;
 constexpr size_t smem_count = stage_count;
 enum SHARED {
   PT,
@@ -116,63 +116,6 @@ inline __device__ int get_index_block(descriptor const &d, int nproma, int ki,
   return d.get(nproma, ki, fi);
 }
 
-template <int nproma>
-inline __device__ void
-copy4(cuda::pipeline<cuda::thread_scope::thread_scope_thread> &pipeline, //
-      descriptor const *d1, real_t *__restrict__ ptr1, int const spos1,
-      int const koffset1, int const fi1, //
-      descriptor const *d2, real_t *__restrict__ ptr2, int const spos2,
-      int const koffset2, int const fi2, //
-      descriptor const *d3, real_t *__restrict__ ptr3, int const spos3,
-      int const koffset3, int const fi3, //
-      descriptor const *d4, real_t *__restrict__ ptr4, int const spos4,
-      int const koffset4, int const fi4, //
-      int ki) {
-  extern __shared__ real_t shared[];
-  constexpr int copies_per_thread = 16 / sizeof(real_t);
-  char *sptr, *dptr;
-  int stage = ki % smem_count;
-  int ti = threadIdx.x & 63;
-  if (threadIdx.x < 1 * nproma / copies_per_thread) {
-    if (!d1)
-      return;
-    sptr = (char *)(shared + stage * SHARED::TOTAL3D * nproma + spos1 * nproma +
-                    ti * copies_per_thread);
-    dptr = (char *)&ptr1[get_index_block(*d1, nproma, ki + koffset1, fi1) +
-                         ti * copies_per_thread];
-  } else if (threadIdx.x < 2 * nproma / copies_per_thread) {
-    if (!d2)
-      return;
-    sptr = (char *)(shared + stage * SHARED::TOTAL3D * nproma + spos2 * nproma +
-                    ti * copies_per_thread);
-    dptr = (char *)&ptr2[get_index_block(*d2, nproma, ki + koffset2, fi2) +
-                         ti * copies_per_thread];
-  } else if (threadIdx.x < 3 * nproma / copies_per_thread) {
-    if (!d3)
-      return;
-    sptr = (char *)(shared + stage * SHARED::TOTAL3D * nproma + spos3 * nproma +
-                    ti * copies_per_thread);
-    dptr = (char *)&ptr3[get_index_block(*d3, nproma, ki + koffset3, fi3) +
-                         ti * copies_per_thread];
-  } else if (threadIdx.x < 4 * nproma / copies_per_thread) {
-    if (!d4)
-      return;
-    sptr = (char *)(shared + stage * SHARED::TOTAL3D * nproma + spos4 * nproma +
-                    ti * copies_per_thread);
-    dptr = (char *)&ptr4[get_index_block(*d4, nproma, ki + koffset4, fi4) +
-                         ti * copies_per_thread];
-  } else {
-    __trap();
-  }
-  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, 16;" ::"r"(
-                   static_cast<std::uint32_t>(__cvta_generic_to_shared(sptr))),
-               "l"(dptr)
-               : "memory");
-  /* cuda::memcpy_async(cooperative_groups::this_thread_block(), */
-  /* shared + stage * SHARED::TOTAL3D * nproma + spos * nproma, */
-  /* &ptr[get_index_block(d, nproma, ki + koffset, fi)], */
-  /* cuda::aligned_size_t<128>(sizeof(*ptr) * nproma), pipeline); */
-}
 template <int nproma>
 inline __device__ void
 copy(cuda::pipeline<cuda::thread_scope::thread_scope_thread> &pipeline,
@@ -300,68 +243,49 @@ __global__ void run_cloudsc(
   real_t prainfrac_toprfz_ = 0;
 
 #pragma unroll
-  for (int to_load = 0; to_load < stage_count - 1; ++to_load) {
-      pipeline.producer_acquire();
-      copy4<nproma>(pipeline,                            //
-                    &descriptor_k, pt, SHARED::PT, 0, 0, //
-                    &descriptor_k, pq, SHARED::PQ, 0, 0, //
-                    &descriptor_k, pa, SHARED::PA, 0, 0, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_T, 0,
-                    POS_T, //
-                    to_load);
-      copy4<nproma>(pipeline,                                       //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 0, 0, 0, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 1, 0, 1, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 2, 0, 2, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 3, 0, 3, //
-                    to_load);
-      copy4<nproma>(pipeline, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 0, 0,
-                    POS_CLD + 0, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 1, 0,
-                    POS_CLD + 1, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 2, 0,
-                    POS_CLD + 2, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 3, 0,
-                    POS_CLD + 3, //
-                    to_load);
-      copy4<nproma>(
-          pipeline,                                                     //
-          &descriptor_tendency, tendency_tmp, SHARED::TEND_Q, 0, POS_Q, //
-          &descriptor_tendency, tendency_tmp, SHARED::TEND_A, 0, POS_A, //
-          &descriptor_k, pap, SHARED::PAP, 0, 0,                        //
-          &descriptor_k1, paph, SHARED::PAPH, 1, 0,                     //
-          to_load);
-      copy4<nproma>(pipeline,                                  //
-                    &descriptor_k, pvfl, SHARED::PVFL, 0, 0,   //
-                    &descriptor_k, pvfi, SHARED::PVFI, 0, 0,   //
-                    &descriptor_k, plude, SHARED::PLUDE, 0, 0, //
-                    nullptr, 0, 0, 0, 0,                       //
-                    to_load);
+  for (int jk = 0; jk < stage_count - 1; ++jk) {
+    pipeline.producer_acquire();
+    copy<nproma>(pipeline, descriptor_k, pt, SHARED::PT, jk);
+    copy<nproma>(pipeline, descriptor_k, pq, SHARED::PQ, jk);
+    copy<nproma>(pipeline, descriptor_k, pa, SHARED::PA, jk);
+    copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_T,
+                 jk, 0, POS_T);
+    copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_Q,
+                 jk, 0, POS_Q);
+    copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_A,
+                 jk, 0, POS_A);
+#pragma unroll
+    for (int jm = 0; jm < NCLV - 1; ++jm) {
+      copy<nproma>(pipeline, descriptor_pclv, pclv, SHARED::PCLV + jm, jk, 0,
+                   jm);
+      copy<nproma>(pipeline, descriptor_tendency, tendency_tmp,
+                   SHARED::TEND_CLD + jm, jk, 0, POS_CLD + jm);
+    }
+    copy<nproma>(pipeline, descriptor_k, pap, SHARED::PAP, jk);
+    copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, jk, 1);
+    copy<nproma>(pipeline, descriptor_k, pvfl, SHARED::PVFL, jk);
+    copy<nproma>(pipeline, descriptor_k, pvfi, SHARED::PVFI, jk);
+    copy<nproma>(pipeline, descriptor_k, plude, SHARED::PLUDE, jk);
 
-      if (to_load >= yrecldp::ncldtop - 1) {
-        if (to_load < klev - 1) {
-          copy4<nproma>(pipeline,                                  //
-                        &descriptor_k, plu, SHARED::PLU, 1, 0,     //
-                        &descriptor_k, psnde, SHARED::PSNDE, 0, 0, //
-                        &descriptor_k, pmfu, SHARED::PMFU, 1, 0,   //
-                        &descriptor_k, pmfd, SHARED::PMFD, 1, 0,   //
-                        to_load);
-        }
-        copy4<nproma>(pipeline, &descriptor_k, psupsat, SHARED::PSUPSAT, 0,
-                      0,                                             //
-                      &descriptor_k, pvervel, SHARED::PVERVEL, 0, 0, //
-                      &descriptor_k, phrsw, SHARED::PHRSW, 0, 0,     //
-                      &descriptor_k, phrlw, SHARED::PHRLW, 0, 0,     //
-                      to_load);
+    if (jk >= yrecldp::ncldtop - 1) {
+      copy<nproma>(pipeline, descriptor_k, psupsat, SHARED::PSUPSAT, jk);
+      if (jk < klev - 1) {
+        copy<nproma>(pipeline, descriptor_k, plu, SHARED::PLU, jk, 1);
+        copy<nproma>(pipeline, descriptor_k, psnde, SHARED::PSNDE, jk);
+        copy<nproma>(pipeline, descriptor_k, pmfu, SHARED::PMFU, jk, 1);
+        copy<nproma>(pipeline, descriptor_k, pmfd, SHARED::PMFD, jk, 1);
       }
+      copy<nproma>(pipeline, descriptor_k, pvervel, SHARED::PVERVEL, jk);
+      copy<nproma>(pipeline, descriptor_k, phrsw, SHARED::PHRSW, jk);
+      copy<nproma>(pipeline, descriptor_k, phrlw, SHARED::PHRLW, jk);
+    }
 
-      if (to_load == 0) {
-        copy<nproma>(pipeline, descriptor_2d, ldcum, SHARED::LDCUM, to_load);
-        copy<nproma>(pipeline, descriptor_2d, ktype, SHARED::KTYPE, to_load);
-        copy<nproma>(pipeline, descriptor_2d, plsm, SHARED::PLSM, to_load);
-      }
-      pipeline.producer_commit();
+    if (jk == 0) {
+      copy<nproma>(pipeline, descriptor_2d, ldcum, SHARED::LDCUM, jk);
+      copy<nproma>(pipeline, descriptor_2d, ktype, SHARED::KTYPE, jk);
+      copy<nproma>(pipeline, descriptor_2d, plsm, SHARED::PLSM, jk);
+    }
+    pipeline.producer_commit();
   }
 
   for (int jk = 0; jk < klev; ++jk) {
@@ -369,58 +293,39 @@ __global__ void run_cloudsc(
     int to_load = jk + stage_count - 1;
     if (to_load < klev) {
       pipeline.producer_acquire();
-      copy4<nproma>(pipeline,                            //
-                    &descriptor_k, pt, SHARED::PT, 0, 0, //
-                    &descriptor_k, pq, SHARED::PQ, 0, 0, //
-                    &descriptor_k, pa, SHARED::PA, 0, 0, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_T, 0,
-                    POS_T, //
-                    to_load);
-      copy4<nproma>(pipeline,                                       //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 0, 0, 0, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 1, 0, 1, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 2, 0, 2, //
-                    &descriptor_pclv, pclv, SHARED::PCLV + 3, 0, 3, //
-                    to_load);
-      copy4<nproma>(pipeline, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 0, 0,
-                    POS_CLD + 0, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 1, 0,
-                    POS_CLD + 1, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 2, 0,
-                    POS_CLD + 2, //
-                    &descriptor_tendency, tendency_tmp, SHARED::TEND_CLD + 3, 0,
-                    POS_CLD + 3, //
-                    to_load);
-      copy4<nproma>(
-          pipeline,                                                     //
-          &descriptor_tendency, tendency_tmp, SHARED::TEND_Q, 0, POS_Q, //
-          &descriptor_tendency, tendency_tmp, SHARED::TEND_A, 0, POS_A, //
-          &descriptor_k, pap, SHARED::PAP, 0, 0,                        //
-          &descriptor_k1, paph, SHARED::PAPH, 1, 0,                     //
-          to_load);
-      copy4<nproma>(pipeline,                                  //
-                    &descriptor_k, pvfl, SHARED::PVFL, 0, 0,   //
-                    &descriptor_k, pvfi, SHARED::PVFI, 0, 0,   //
-                    &descriptor_k, plude, SHARED::PLUDE, 0, 0, //
-                    nullptr, 0, 0, 0, 0,                       //
-                    to_load);
+      copy<nproma>(pipeline, descriptor_k, pt, SHARED::PT, to_load);
+      copy<nproma>(pipeline, descriptor_k, pq, SHARED::PQ, to_load);
+      copy<nproma>(pipeline, descriptor_k, pa, SHARED::PA, to_load);
+      copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_T,
+                   to_load, 0, POS_T);
+      copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_Q,
+                   to_load, 0, POS_Q);
+      copy<nproma>(pipeline, descriptor_tendency, tendency_tmp, SHARED::TEND_A,
+                   to_load, 0, POS_A);
+#pragma unroll
+      for (int jm = 0; jm < NCLV - 1; ++jm) {
+        copy<nproma>(pipeline, descriptor_pclv, pclv, SHARED::PCLV + jm,
+                     to_load, 0, jm);
+        copy<nproma>(pipeline, descriptor_tendency, tendency_tmp,
+                     SHARED::TEND_CLD + jm, to_load, 0, POS_CLD + jm);
+      }
+      copy<nproma>(pipeline, descriptor_k, pap, SHARED::PAP, to_load);
+      copy<nproma>(pipeline, descriptor_k1, paph, SHARED::PAPH, to_load, 1);
+      copy<nproma>(pipeline, descriptor_k, pvfl, SHARED::PVFL, to_load);
+      copy<nproma>(pipeline, descriptor_k, pvfi, SHARED::PVFI, to_load);
+      copy<nproma>(pipeline, descriptor_k, plude, SHARED::PLUDE, to_load);
 
       if (to_load >= yrecldp::ncldtop - 1) {
+        copy<nproma>(pipeline, descriptor_k, psupsat, SHARED::PSUPSAT, to_load);
         if (to_load < klev - 1) {
-          copy4<nproma>(pipeline,                                  //
-                        &descriptor_k, plu, SHARED::PLU, 1, 0,     //
-                        &descriptor_k, psnde, SHARED::PSNDE, 0, 0, //
-                        &descriptor_k, pmfu, SHARED::PMFU, 1, 0,   //
-                        &descriptor_k, pmfd, SHARED::PMFD, 1, 0,   //
-                        to_load);
+          copy<nproma>(pipeline, descriptor_k, plu, SHARED::PLU, to_load, 1);
+          copy<nproma>(pipeline, descriptor_k, psnde, SHARED::PSNDE, to_load);
+          copy<nproma>(pipeline, descriptor_k, pmfu, SHARED::PMFU, to_load, 1);
+          copy<nproma>(pipeline, descriptor_k, pmfd, SHARED::PMFD, to_load, 1);
         }
-        copy4<nproma>(pipeline, &descriptor_k, psupsat, SHARED::PSUPSAT, 0,
-                      0,                                             //
-                      &descriptor_k, pvervel, SHARED::PVERVEL, 0, 0, //
-                      &descriptor_k, phrsw, SHARED::PHRSW, 0, 0,     //
-                      &descriptor_k, phrlw, SHARED::PHRLW, 0, 0,     //
-                      to_load);
+        copy<nproma>(pipeline, descriptor_k, pvervel, SHARED::PVERVEL, to_load);
+        copy<nproma>(pipeline, descriptor_k, phrsw, SHARED::PHRSW, to_load);
+        copy<nproma>(pipeline, descriptor_k, phrlw, SHARED::PHRLW, to_load);
       }
 
       if (to_load == 0) {
