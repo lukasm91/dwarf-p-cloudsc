@@ -123,11 +123,13 @@ copy(cuda::pipeline<cuda::thread_scope::thread_scope_thread> &pipeline,
      int const ki, int const koffset = 0, int const fi = 0) {
   extern __shared__ real_t shared[];
   int stage = ki % smem_count;
-  cuda::memcpy_async(cooperative_groups::this_thread_block(),
-                     shared + stage * SHARED::TOTAL3D * nproma + spos * nproma,
-                     &ptr[get_index_block(d, nproma, ki + koffset, fi)],
-                     cuda::aligned_size_t<128>(sizeof(*ptr) * nproma),
-                     pipeline);
+  constexpr int loads_per_thread = 16 / sizeof(real_t);
+  if (threadIdx.x < nproma / loads_per_thread) {
+      cuda::memcpy_async(shared + stage * SHARED::TOTAL3D * nproma + spos * nproma + threadIdx.x * loads_per_thread,
+                         &ptr[get_index_block(d, nproma, ki + koffset, fi) + threadIdx.x * loads_per_thread],
+                         cuda::aligned_size_t<128>(16),
+                         pipeline);
+  }
 }
 template <int nproma>
 inline __device__ real_t &at_shared(int const spos, int const jk = 0) {
